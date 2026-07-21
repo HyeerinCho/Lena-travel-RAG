@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Travel RAG</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=Outfit:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #eef3f0;
+        --bg-deep: #d9e5df;
+        --ink: #1a2a24;
+        --muted: #5a6e66;
+        --user: #1f4d3a;
+        --agent: #ffffff;
+        --line: rgba(26, 42, 36, 0.1);
+        --accent: #2a7a5c;
+        --danger: #a33b3b;
+        --shadow: 0 10px 30px rgba(26, 42, 36, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+
+      body {
+        font-family: "IBM Plex Sans KR", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(1200px 600px at 10% -10%, #f7fbf8 0%, transparent 55%),
+          radial-gradient(900px 500px at 100% 0%, #d7ebe2 0%, transparent 50%),
+          linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+      }
+
+      .app {
+        max-width: 720px;
+        margin: 0 auto;
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        padding: 28px 20px 20px;
+      }
+
+      header {
+        margin-bottom: 20px;
+        animation: rise 0.5s ease both;
+      }
+
+      .brand {
+        font-family: "Outfit", sans-serif;
+        font-size: 2rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        margin: 0;
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .chat {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        overflow-y: auto;
+        padding: 8px 2px 18px;
+        min-height: 320px;
+      }
+
+      .bubble {
+        max-width: 88%;
+        padding: 14px 16px;
+        line-height: 1.55;
+        font-size: 0.98rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        animation: rise 0.35s ease both;
+      }
+
+      .bubble.user {
+        align-self: flex-end;
+        background: var(--user);
+        color: #f4faf7;
+        border-radius: 18px 18px 4px 18px;
+      }
+
+      .bubble.agent {
+        align-self: flex-start;
+        background: var(--agent);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        border-radius: 18px 18px 18px 4px;
+      }
+
+      .bubble.agent.error {
+        color: var(--danger);
+        border-color: rgba(163, 59, 59, 0.25);
+      }
+
+      .bubble.typing {
+        color: var(--muted);
+      }
+
+      .empty {
+        margin: auto;
+        text-align: center;
+        color: var(--muted);
+        animation: rise 0.5s ease 0.1s both;
+      }
+
+      .empty p {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .composer {
+        display: flex;
+        gap: 10px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+        animation: rise 0.5s ease 0.15s both;
+      }
+
+      .composer input {
+        flex: 1;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 14px;
+        padding: 14px 16px;
+        font: inherit;
+        color: var(--ink);
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .composer input:focus {
+        border-color: rgba(42, 122, 92, 0.45);
+        box-shadow: 0 0 0 3px rgba(42, 122, 92, 0.12);
+      }
+
+      .composer button {
+        border: none;
+        background: var(--accent);
+        color: white;
+        font: inherit;
+        font-weight: 500;
+        border-radius: 14px;
+        padding: 0 18px;
+        cursor: pointer;
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+
+      .composer button:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
+
+      .composer button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 640px) {
+        .app {
+          padding: 20px 14px 14px;
+        }
+
+        .brand {
+          font-size: 1.7rem;
+        }
+
+        .bubble {
+          max-width: 94%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1 class="brand">Travel RAG</h1>
+        <p class="subtitle">여행에 대해 물어보세요.</p>
+      </header>
+
+      <main id="chat" class="chat" aria-live="polite">
+        <div class="empty" id="empty">
+          <p>예: 제주도에 유명한 게 뭐야?</p>
+        </div>
+      </main>
+
+      <form class="composer" id="form">
+        <input
+          id="question"
+          type="text"
+          placeholder="질문을 입력하세요"
+          autocomplete="off"
+          required
+        />
+        <button type="submit" id="send">보내기</button>
+      </form>
+    </div>
+
+    <script>
+      const chat = document.getElementById("chat");
+      const empty = document.getElementById("empty");
+      const form = document.getElementById("form");
+      const input = document.getElementById("question");
+      const send = document.getElementById("send");
+
+      function addBubble(text, role, extraClass = "") {
+        if (empty) empty.remove();
+        const el = document.createElement("div");
+        el.className = `bubble ${role}${extraClass ? " " + extraClass : ""}`;
+        el.textContent = text;
+        chat.appendChild(el);
+        chat.scrollTop = chat.scrollHeight;
+        return el;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const question = input.value.trim();
+        if (!question) return;
+
+        addBubble(question, "user");
+        input.value = "";
+        input.disabled = true;
+        send.disabled = true;
+
+        const pending = addBubble("답변을 작성하는 중…", "agent", "typing");
+
+        try {
+          const response = await fetch("/travel/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`요청 실패 (${response.status})`);
+          }
+
+          const data = await response.json();
+          pending.classList.remove("typing");
+          pending.textContent = data.answer || "답변을 받지 못했습니다.";
+        } catch (error) {
+          pending.classList.remove("typing");
+          pending.classList.add("error");
+          pending.textContent =
+            error instanceof Error
+              ? `오류: ${error.message}`
+              : "알 수 없는 오류가 발생했습니다.";
+        } finally {
+          input.disabled = false;
+          send.disabled = false;
+          input.focus();
+          chat.scrollTop = chat.scrollHeight;
+        }
+      });
+
+      input.focus();
+    </script>
+  </body>
+</html>

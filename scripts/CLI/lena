@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+import runpy
+import sys
+from pathlib import Path
+
+
+def _project_root() -> Path:
+    for candidate in (Path.cwd(), *Path.cwd().parents):
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    raise SystemExit("pyproject.toml not found. Run this from the project directory.")
+
+
+def main() -> None:
+    root = str(_project_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    runpy.run_module("src.main", run_name="__main__", alter_sys=True)
+
+
+if __name__ == "__main__":
+    main()

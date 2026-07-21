@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# 원본 / 생성 데이터
+data/221.관광지 소개 다국어 번역 데이터/
+data/여행 정보 데이터셋/
+data/travel/
+
+# IDE / OS
+.DS_Store
+.cursor/
