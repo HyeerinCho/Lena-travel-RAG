@@ -174,6 +174,49 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
     }
 
 
+def _focus_single_region(
+    places: list[dict[str, Any]],
+    destination: str | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Keep candidates within a single province/region so the itinerary stays local.
+
+    When ``destination`` is empty (e.g. "아무곳이나 골라줘"), the SQLite/FAISS search
+    returns POIs from all over the country. Feeding those straight to the LLM produces
+    scattered plans (대구/부산/광주 mixed). We pick the region with the most candidates
+    and drop everything else, then surface that region as the destination.
+    """
+    if not places:
+        return places, destination
+
+    def _region_of(p: dict[str, Any]) -> str | None:
+        value = p.get("region") or p.get("city")
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+    if destination:
+        matched = [p for p in places if destination in " ".join(
+            str(p.get(k) or "") for k in ("region", "city", "address_ko")
+        )]
+        # Only narrow when we still have enough to build a plan.
+        if len(matched) >= 3:
+            return matched, destination
+        return places, destination
+
+    counts: dict[str, int] = {}
+    for p in places:
+        region = _region_of(p)
+        if region:
+            counts[region] = counts.get(region, 0) + 1
+    if not counts:
+        return places, destination
+
+    dominant = max(counts, key=lambda r: counts[r])
+    focused = [p for p in places if _region_of(p) == dominant]
+    return (focused or places), dominant
+
+
 def _compact_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
     keys = (
         "poi_id",
@@ -416,6 +459,10 @@ def build_travel_graph(search: TravelSearchService):
                 limit=12,
             )
 
+        places, focused_destination = _focus_single_region(places, destination)
+        if focused_destination and not destination:
+            destination = focused_destination
+
         courses = search.search_courses(
             city=destination,
             days=state.get("days"),
@@ -430,7 +477,14 @@ def build_travel_graph(search: TravelSearchService):
         if state.get("budget") is not None and courses:
             warnings.append("코스 가격은 과거 상품 참고값입니다.")
 
-        return {"places": places, "courses": courses, "warnings": warnings}
+        result: TravelState = {
+            "places": places,
+            "courses": courses,
+            "warnings": warnings,
+        }
+        if focused_destination:
+            result["destination"] = focused_destination
+        return result
 
     def build_itinerary(state: TravelState) -> TravelState:
         places = _compact_places(state.get("places") or [])
@@ -600,6 +654,12 @@ def stream_build_itinerary_tokens(
     places = search.search_places(query=query, city=destination, types=types, limit=12)
     if len(places) < 4 and destination:
         places = search.search_places(query=query, city=destination, types=None, limit=12)
+
+    places, focused_destination = _focus_single_region(places, destination)
+    if focused_destination:
+        destination = focused_destination
+        result_so_far["destination"] = focused_destination
+
     courses = search.search_courses(
         city=destination,
         days=result_so_far.get("days"),
