@@ -498,8 +498,9 @@
         return sessions;
       }
 
-      async function selectSession(sessionId) {
-        if (busy) return;
+      async function selectSession(sessionId, options = {}) {
+        const force = Boolean(options.force);
+        if (busy && !force) return;
         currentSessionId = sessionId;
         localStorage.setItem("travelSessionId", sessionId);
         setBusy(true);
@@ -507,12 +508,15 @@
           const response = await fetch(`/travel/sessions/${sessionId}`);
           if (!response.ok) throw new Error("세션을 불러오지 못했습니다.");
           const detail = await response.json();
+          // Ignore stale responses if the user switched sessions meanwhile.
+          if (currentSessionId !== sessionId) return;
           subtitle.textContent = detail.destination
             ? `${detail.title} · ${detail.destination}`
             : detail.title;
           renderMessages(detail.messages || []);
           await refreshSessions();
         } catch (error) {
+          if (currentSessionId !== sessionId) return;
           clearChat();
           addBubble(
             error instanceof Error ? error.message : "세션 로드 실패",
@@ -520,8 +524,10 @@
             "error"
           );
         } finally {
-          setBusy(false);
-          input.focus();
+          if (currentSessionId === sessionId) {
+            setBusy(false);
+            input.focus();
+          }
         }
       }
 
@@ -571,7 +577,7 @@
           }
           const sessions = await refreshSessions();
           if (!currentSessionId && sessions.length) {
-            await selectSession(sessions[0].id);
+            await selectSession(sessions[0].id, { force: true });
           } else {
             setBusy(false);
           }
@@ -640,16 +646,15 @@
       });
 
       (async function init() {
-        setBusy(true);
         try {
           const sessions = await refreshSessions();
           if (
             currentSessionId &&
             sessions.some((session) => session.id === currentSessionId)
           ) {
-            await selectSession(currentSessionId);
+            await selectSession(currentSessionId, { force: true });
           } else if (sessions.length) {
-            await selectSession(sessions[0].id);
+            await selectSession(sessions[0].id, { force: true });
           } else {
             currentSessionId = null;
             clearChat();
