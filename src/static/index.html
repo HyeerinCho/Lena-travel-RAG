@@ -452,6 +452,15 @@
         padding: 4px 8px;
       }
 
+      .source-chip.clickable {
+        color: var(--accent);
+        cursor: pointer;
+      }
+
+      .source-chip.clickable:hover {
+        background: rgba(42, 122, 92, 0.18);
+      }
+
       .empty {
         margin: auto;
         text-align: center;
@@ -884,16 +893,35 @@
           wrap.appendChild(box);
         }
 
-        if (sources.length) {
+        const usedPoiIds = new Set();
+        for (const day of itinerary) {
+          for (const slot of day.slots || []) {
+            if (slot.poi_id) usedPoiIds.add(String(slot.poi_id));
+          }
+        }
+        const seenAlt = new Set();
+        const altPlaces = [];
+        for (const s of sources) {
+          if (s.type && s.type !== "poi") continue;
+          if (!s.id || !s.name) continue;
+          const id = String(s.id);
+          if (usedPoiIds.has(id) || seenAlt.has(id)) continue;
+          seenAlt.add(id);
+          altPlaces.push(s);
+        }
+
+        if (altPlaces.length) {
           const label = document.createElement("div");
           label.className = "session-meta";
-          label.textContent = "출처";
+          label.textContent = "같은 지역 다른 추천 장소";
           const list = document.createElement("ul");
           list.className = "sources";
-          for (const s of sources) {
+          for (const s of altPlaces) {
             const li = document.createElement("li");
-            li.className = "source-chip";
-            li.textContent = s.name || s.id || s.type || "source";
+            li.className = "source-chip clickable";
+            li.textContent = s.name;
+            li.title = "장소 상세 보기";
+            li.addEventListener("click", () => openPlace(s.id));
             list.appendChild(li);
           }
           wrap.appendChild(label);
