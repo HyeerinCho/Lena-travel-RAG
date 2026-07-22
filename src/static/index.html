@@ -23,6 +23,8 @@
         --danger: #a33b3b;
         --shadow: 0 10px 30px rgba(26, 42, 36, 0.08);
         --sidebar: rgba(255, 255, 255, 0.72);
+        --sidebar-width: 260px;
+        --warn: #8a6a1a;
       }
 
       * {
@@ -47,14 +49,20 @@
 
       .shell {
         display: grid;
-        grid-template-columns: 260px minmax(0, 1fr);
+        grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        width: 100%;
         height: 100%;
         height: 100dvh;
-        max-width: 1100px;
-        margin: 0 auto;
+        margin: 0;
       }
 
       .sidebar {
+        position: sticky;
+        top: 0;
+        left: 0;
+        align-self: start;
+        width: var(--sidebar-width);
+        height: 100dvh;
         display: flex;
         flex-direction: column;
         gap: 12px;
@@ -63,6 +71,7 @@
         background: var(--sidebar);
         backdrop-filter: blur(10px);
         min-height: 0;
+        z-index: 2;
       }
 
       .sidebar-top {
@@ -157,7 +166,10 @@
 
       .app {
         min-width: 0;
+        width: 100%;
+        max-width: 760px;
         height: 100%;
+        margin: 0 auto;
         display: flex;
         flex-direction: column;
         padding: 28px 20px 20px;
@@ -166,7 +178,7 @@
 
       header {
         flex-shrink: 0;
-        margin-bottom: 16px;
+        margin-bottom: 12px;
         animation: rise 0.5s ease both;
       }
 
@@ -182,6 +194,78 @@
         margin: 6px 0 0;
         color: var(--muted);
         font-size: 0.95rem;
+      }
+
+      .meta-editor {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.65);
+        display: none;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .meta-editor.open {
+        display: flex;
+      }
+
+      .meta-editor label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.75rem;
+        color: var(--muted);
+        min-width: 110px;
+        flex: 1;
+      }
+
+      .meta-editor input,
+      .meta-editor select {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        font: inherit;
+        color: var(--ink);
+        background: #fff;
+      }
+
+      .meta-actions {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        width: 100%;
+      }
+
+      .ghost-btn,
+      .text-btn {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--ink);
+        font: inherit;
+        font-size: 0.85rem;
+        border-radius: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      .text-btn {
+        border: none;
+        background: transparent;
+        color: var(--accent);
+        padding: 4px 0;
+      }
+
+      .primary-btn {
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-size: 0.85rem;
+        border-radius: 10px;
+        padding: 8px 14px;
+        cursor: pointer;
       }
 
       .chat {
@@ -218,6 +302,12 @@
         border: 1px solid var(--line);
         box-shadow: var(--shadow);
         border-radius: 18px 18px 18px 4px;
+        white-space: normal;
+      }
+
+      .bubble.agent .answer-text {
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
       .bubble.agent.error {
@@ -227,6 +317,139 @@
 
       .bubble.typing {
         color: var(--muted);
+      }
+
+      .plan {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .plan-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .day-block {
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+
+      .day-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        border: none;
+        background: transparent;
+        padding: 4px 0;
+        margin: 0;
+        font: inherit;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .day-toggle:hover .day-title {
+        color: var(--accent);
+      }
+
+      .day-chevron {
+        flex-shrink: 0;
+        width: 1em;
+        color: var(--muted);
+        font-size: 0.75rem;
+        transition: transform 0.15s ease;
+      }
+
+      .day-block.open .day-chevron {
+        transform: rotate(90deg);
+      }
+
+      .day-title {
+        font-weight: 600;
+        font-size: 0.92rem;
+        flex: 1;
+      }
+
+      .day-body {
+        display: none;
+        padding: 4px 0 2px 1.4em;
+      }
+
+      .day-block.open .day-body {
+        display: block;
+      }
+
+      .day-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 6px;
+      }
+
+      .slot {
+        display: grid;
+        grid-template-columns: 72px 1fr;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 0.9rem;
+      }
+
+      .slot-time {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .slot-place {
+        border: none;
+        background: none;
+        padding: 0;
+        font: inherit;
+        color: var(--ink);
+        text-align: left;
+        cursor: default;
+      }
+
+      .slot-place.clickable {
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .slot-note {
+        grid-column: 2;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .warnings {
+        color: var(--warn);
+        font-size: 0.85rem;
+      }
+
+      .warnings ul,
+      .sources {
+        margin: 4px 0 0;
+        padding-left: 18px;
+      }
+
+      .sources {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        list-style: none;
+        padding-left: 0;
+      }
+
+      .source-chip {
+        font-size: 0.75rem;
+        color: var(--muted);
+        background: rgba(42, 122, 92, 0.08);
+        border-radius: 8px;
+        padding: 4px 8px;
       }
 
       .empty {
@@ -293,6 +516,63 @@
         cursor: not-allowed;
       }
 
+      .drawer-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(26, 42, 36, 0.28);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        z-index: 20;
+      }
+
+      .drawer-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: min(380px, 92vw);
+        height: 100dvh;
+        background: #fff;
+        box-shadow: -12px 0 40px rgba(26, 42, 36, 0.12);
+        transform: translateX(100%);
+        transition: transform 0.25s ease;
+        z-index: 21;
+        padding: 24px 20px;
+        overflow-y: auto;
+      }
+
+      .drawer.open {
+        transform: translateX(0);
+      }
+
+      .drawer h2 {
+        margin: 0 0 12px;
+        font-family: "Outfit", sans-serif;
+        font-size: 1.25rem;
+      }
+
+      .drawer dl {
+        margin: 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .drawer dt {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .drawer dd {
+        margin: 2px 0 0;
+        font-size: 0.92rem;
+        white-space: pre-wrap;
+      }
+
       @keyframes rise {
         from {
           opacity: 0;
@@ -311,12 +591,17 @@
         }
 
         .sidebar {
+          position: sticky;
+          top: 0;
+          width: 100%;
+          height: auto;
+          max-height: 220px;
           border-right: none;
           border-bottom: 1px solid var(--line);
-          max-height: 220px;
         }
 
         .app {
+          max-width: none;
           padding: 16px 14px 14px;
         }
 
@@ -344,6 +629,25 @@
         <header>
           <h1 class="brand">Travel RAG</h1>
           <p class="subtitle" id="subtitle">여행별로 대화를 나눠 이어갈 수 있습니다.</p>
+          <button type="button" class="text-btn" id="toggleMeta" hidden>세션 정보 편집</button>
+          <form class="meta-editor" id="metaEditor">
+            <label>제목<input id="metaTitle" name="title" /></label>
+            <label>목적지<input id="metaDestination" name="destination" /></label>
+            <label>일수<input id="metaDays" name="days" type="number" min="1" max="30" /></label>
+            <label>예산<input id="metaBudget" name="budget" type="number" min="0" /></label>
+            <label
+              >언어
+              <select id="metaLanguage" name="language">
+                <option value="ko">ko</option>
+                <option value="en">en</option>
+              </select>
+            </label>
+            <label>선호 (쉼표 구분)<input id="metaPreferences" name="preferences" /></label>
+            <div class="meta-actions">
+              <button type="submit" class="primary-btn">저장</button>
+              <button type="button" class="ghost-btn" id="cancelMeta">닫기</button>
+            </div>
+          </form>
         </header>
 
         <main id="chat" class="chat" aria-live="polite">
@@ -365,6 +669,13 @@
       </div>
     </div>
 
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="drawer" id="placeDrawer" aria-hidden="true">
+      <button type="button" class="text-btn" id="closeDrawer">닫기</button>
+      <h2 id="placeTitle">장소 상세</h2>
+      <dl id="placeBody"></dl>
+    </aside>
+
     <script>
       const chat = document.getElementById("chat");
       const form = document.getElementById("form");
@@ -373,9 +684,32 @@
       const sessionList = document.getElementById("sessionList");
       const newSessionBtn = document.getElementById("newSession");
       const subtitle = document.getElementById("subtitle");
+      const toggleMeta = document.getElementById("toggleMeta");
+      const metaEditor = document.getElementById("metaEditor");
+      const cancelMeta = document.getElementById("cancelMeta");
+      const drawer = document.getElementById("placeDrawer");
+      const drawerBackdrop = document.getElementById("drawerBackdrop");
+      const closeDrawer = document.getElementById("closeDrawer");
+      const placeTitle = document.getElementById("placeTitle");
+      const placeBody = document.getElementById("placeBody");
 
       let currentSessionId = localStorage.getItem("travelSessionId") || null;
+      let currentSession = null;
+      let latestPlan = null;
       let busy = false;
+
+      const SLOT_LABEL = {
+        morning: "오전",
+        afternoon: "오후",
+        latestPlan: "추가",
+        evening: "저녁",
+      };
+
+      const STATUS_LABEL = {
+        extracting: "요구사항을 파악하는 중…",
+        searching: "장소를 검색하는 중…",
+        writing: "일정을 작성하는 중…",
+      };
 
       function setBusy(next) {
         busy = next;
@@ -391,6 +725,7 @@
         empty.id = "empty";
         empty.innerHTML = "<p>예: 제주 2박3일 자연 경관 위주로 짜줘</p>";
         chat.appendChild(empty);
+        latestPlan = null;
       }
 
       function addBubble(text, role, extraClass = "") {
@@ -398,23 +733,245 @@
         if (empty) empty.remove();
         const el = document.createElement("div");
         el.className = `bubble ${role}${extraClass ? " " + extraClass : ""}`;
-        el.textContent = text;
+        if (role === "agent") {
+          const answer = document.createElement("div");
+          answer.className = "answer-text";
+          answer.textContent = text;
+          el.appendChild(answer);
+        } else {
+          el.textContent = text;
+        }
         chat.appendChild(el);
         chat.scrollTop = chat.scrollHeight;
         return el;
       }
 
+      function fillAgentBubble(el, data) {
+        el.classList.remove("typing");
+        el.innerHTML = "";
+        const answer = document.createElement("div");
+        answer.className = "answer-text";
+        answer.textContent = data.answer || "답변을 받지 못했습니다.";
+        el.appendChild(answer);
+        const plan = renderPlanCards(data);
+        if (plan) el.appendChild(plan);
+        if (data.itinerary && data.itinerary.length) {
+          latestPlan = {
+            answer: data.answer || "",
+            itinerary: data.itinerary || [],
+            warnings: data.warnings || [],
+            sources: data.sources || [],
+            destination: data.destination,
+            days: data.days,
+          };
+        }
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      function renderPlanCards(data) {
+        const itinerary = data.itinerary || [];
+        const warnings = data.warnings || [];
+        const sources = data.sources || [];
+        if (!itinerary.length && !warnings.length && !sources.length) return null;
+
+        const wrap = document.createElement("div");
+        wrap.className = "plan";
+
+        if (itinerary.length) {
+          const toolbar = document.createElement("div");
+          toolbar.className = "plan-toolbar";
+          const jsonBtn = document.createElement("button");
+          jsonBtn.type = "button";
+          jsonBtn.className = "ghost-btn";
+          jsonBtn.textContent = "JSON 내보내기";
+          jsonBtn.addEventListener("click", () => downloadPlan("json", data));
+          const mdBtn = document.createElement("button");
+          mdBtn.type = "button";
+          mdBtn.className = "ghost-btn";
+          mdBtn.textContent = "Markdown 내보내기";
+          mdBtn.addEventListener("click", () => downloadPlan("md", data));
+          toolbar.appendChild(jsonBtn);
+          toolbar.appendChild(mdBtn);
+          wrap.appendChild(toolbar);
+
+          for (const day of itinerary) {
+            const block = document.createElement("div");
+            block.className = "day-block open";
+
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "day-toggle";
+            toggle.setAttribute(
+              "aria-expanded",
+              "true"
+            );
+            toggle.setAttribute(
+              "aria-label",
+              `Day ${day.day} 일정 펼치기/접기`
+            );
+            const chevron = document.createElement("span");
+            chevron.className = "day-chevron";
+            chevron.textContent = "▶";
+            chevron.setAttribute("aria-hidden", "true");
+            const title = document.createElement("span");
+            title.className = "day-title";
+            title.textContent = `Day ${day.day}${day.theme ? ` · ${day.theme}` : ""}`;
+            toggle.appendChild(chevron);
+            toggle.appendChild(title);
+            toggle.addEventListener("click", () => {
+              const open = block.classList.toggle("open");
+              toggle.setAttribute("aria-expanded", open ? "true" : "false");
+            });
+            block.appendChild(toggle);
+
+            const body = document.createElement("div");
+            body.className = "day-body";
+
+            const actions = document.createElement("div");
+            actions.className = "day-actions";
+            const rewrite = document.createElement("button");
+            rewrite.type = "button";
+            rewrite.className = "ghost-btn";
+            rewrite.textContent = "이 날만 다시";
+            rewrite.addEventListener("click", (event) => {
+              event.stopPropagation();
+              rewriteDay(day.day);
+            });
+            actions.appendChild(rewrite);
+            body.appendChild(actions);
+
+            for (const slot of day.slots || []) {
+              const row = document.createElement("div");
+              row.className = "slot";
+              const time = document.createElement("div");
+              time.className = "slot-time";
+              time.textContent = SLOT_LABEL[slot.time] || slot.time || "";
+              const place = document.createElement("button");
+              place.type = "button";
+              place.className = "slot-place";
+              place.textContent = slot.place_name || "장소";
+              if (slot.poi_id) {
+                place.classList.add("clickable");
+                place.dataset.poiId = slot.poi_id;
+                place.addEventListener("click", () => openPlace(slot.poi_id));
+              }
+              row.appendChild(time);
+              row.appendChild(place);
+              if (slot.note) {
+                const note = document.createElement("div");
+                note.className = "slot-note";
+                note.textContent = slot.note;
+                row.appendChild(note);
+              }
+              body.appendChild(row);
+            }
+            block.appendChild(body);
+            wrap.appendChild(block);
+          }
+        }
+
+        if (warnings.length) {
+          const box = document.createElement("div");
+          box.className = "warnings";
+          box.innerHTML = "<strong>주의</strong>";
+          const ul = document.createElement("ul");
+          for (const w of warnings) {
+            const li = document.createElement("li");
+            li.textContent = w;
+            ul.appendChild(li);
+          }
+          box.appendChild(ul);
+          wrap.appendChild(box);
+        }
+
+        if (sources.length) {
+          const label = document.createElement("div");
+          label.className = "session-meta";
+          label.textContent = "출처";
+          const list = document.createElement("ul");
+          list.className = "sources";
+          for (const s of sources) {
+            const li = document.createElement("li");
+            li.className = "source-chip";
+            li.textContent = s.name || s.id || s.type || "source";
+            list.appendChild(li);
+          }
+          wrap.appendChild(label);
+          wrap.appendChild(list);
+        }
+
+        return wrap;
+      }
+
+      function itineraryToMarkdown(data) {
+        const lines = [];
+        if (data.destination) lines.push(`# ${data.destination} 여행`);
+        else lines.push("# 여행 일정");
+        if (data.days) lines.push(`\n${data.days}일 일정\n`);
+        if (data.answer) {
+          lines.push("## 요약");
+          lines.push(data.answer);
+          lines.push("");
+        }
+        for (const day of data.itinerary || []) {
+          lines.push(`## Day ${day.day}${day.theme ? ` — ${day.theme}` : ""}`);
+          for (const slot of day.slots || []) {
+            const when = SLOT_LABEL[slot.time] || slot.time || "";
+            lines.push(`- **${when}**: ${slot.place_name || ""}${slot.note ? ` — ${slot.note}` : ""}`);
+          }
+          lines.push("");
+        }
+        if ((data.warnings || []).length) {
+          lines.push("## 주의");
+          for (const w of data.warnings) lines.push(`- ${w}`);
+        }
+        return lines.join("\n");
+      }
+
+      function downloadPlan(format, data) {
+        const plan = data || latestPlan;
+        if (!plan || !(plan.itinerary || []).length) return;
+        let content;
+        let filename;
+        let mime;
+        if (format === "md") {
+          content = itineraryToMarkdown(plan);
+          filename = "itinerary.md";
+          mime = "text/markdown;charset=utf-8";
+        } else {
+          content = JSON.stringify(plan, null, 2);
+          filename = "itinerary.json";
+          mime = "application/json;charset=utf-8";
+        }
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
       function renderMessages(messages) {
         chat.innerHTML = "";
+        latestPlan = null;
         if (!messages || messages.length === 0) {
           clearChat();
           return;
         }
         for (const message of messages) {
-          addBubble(
-            message.content,
-            message.role === "user" ? "user" : "agent"
-          );
+          if (message.role === "user") {
+            addBubble(message.content, "user");
+            continue;
+          }
+          const el = addBubble(message.content || "", "agent");
+          const payload = message.payload || {};
+          if (payload.itinerary || payload.warnings || payload.sources) {
+            fillAgentBubble(el, {
+              answer: message.content,
+              ...payload,
+            });
+          }
         }
       }
 
@@ -426,6 +983,16 @@
           parts.push(`메시지 ${session.message_count}`);
         }
         return parts.join(" · ") || "새 대화";
+      }
+
+      function fillMetaForm(session) {
+        if (!session) return;
+        document.getElementById("metaTitle").value = session.title || "";
+        document.getElementById("metaDestination").value = session.destination || "";
+        document.getElementById("metaDays").value = session.days ?? "";
+        document.getElementById("metaBudget").value = session.budget ?? "";
+        document.getElementById("metaLanguage").value = session.language || "ko";
+        document.getElementById("metaPreferences").value = (session.preferences || []).join(", ");
       }
 
       function renderSessions(sessions) {
@@ -482,8 +1049,18 @@
         return sessions;
       }
 
-      async function selectSession(sessionId) {
-        if (busy) return;
+      function applySessionHeader(session) {
+        currentSession = session;
+        subtitle.textContent = session.destination
+          ? `${session.title} · ${session.destination}`
+          : session.title;
+        toggleMeta.hidden = false;
+        fillMetaForm(session);
+      }
+
+      async function selectSession(sessionId, options = {}) {
+        const force = Boolean(options.force);
+        if (busy && !force) return;
         currentSessionId = sessionId;
         localStorage.setItem("travelSessionId", sessionId);
         setBusy(true);
@@ -491,12 +1068,12 @@
           const response = await fetch(`/travel/sessions/${sessionId}`);
           if (!response.ok) throw new Error("세션을 불러오지 못했습니다.");
           const detail = await response.json();
-          subtitle.textContent = detail.destination
-            ? `${detail.title} · ${detail.destination}`
-            : detail.title;
+          if (currentSessionId !== sessionId) return;
+          applySessionHeader(detail);
           renderMessages(detail.messages || []);
           await refreshSessions();
         } catch (error) {
+          if (currentSessionId !== sessionId) return;
           clearChat();
           addBubble(
             error instanceof Error ? error.message : "세션 로드 실패",
@@ -504,8 +1081,10 @@
             "error"
           );
         } finally {
-          setBusy(false);
-          input.focus();
+          if (currentSessionId === sessionId) {
+            setBusy(false);
+            input.focus();
+          }
         }
       }
 
@@ -522,7 +1101,8 @@
           const session = await response.json();
           currentSessionId = session.id;
           localStorage.setItem("travelSessionId", session.id);
-          subtitle.textContent = session.title;
+          applySessionHeader(session);
+          metaEditor.classList.remove("open");
           clearChat();
           await refreshSessions();
         } catch (error) {
@@ -549,13 +1129,16 @@
           if (!response.ok) throw new Error("세션 삭제 실패");
           if (currentSessionId === sessionId) {
             currentSessionId = null;
+            currentSession = null;
             localStorage.removeItem("travelSessionId");
             subtitle.textContent = "여행별로 대화를 나눠 이어갈 수 있습니다.";
+            toggleMeta.hidden = true;
+            metaEditor.classList.remove("open");
             clearChat();
           }
           const sessions = await refreshSessions();
           if (!currentSessionId && sessions.length) {
-            await selectSession(sessions[0].id);
+            await selectSession(sessions[0].id, { force: true });
           } else {
             setBusy(false);
           }
@@ -566,6 +1149,232 @@
             "error"
           );
           setBusy(false);
+        }
+      }
+
+      toggleMeta.addEventListener("click", () => {
+        metaEditor.classList.toggle("open");
+        if (currentSession) fillMetaForm(currentSession);
+      });
+      cancelMeta.addEventListener("click", () => metaEditor.classList.remove("open"));
+
+      metaEditor.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!currentSessionId || busy) return;
+        const prefsRaw = document.getElementById("metaPreferences").value.trim();
+        const preferences = prefsRaw
+          ? prefsRaw.split(",").map((s) => s.trim()).filter(Boolean)
+          : [];
+        const daysVal = document.getElementById("metaDays").value;
+        const budgetVal = document.getElementById("metaBudget").value;
+        const body = {
+          title: document.getElementById("metaTitle").value.trim() || null,
+          destination: document.getElementById("metaDestination").value.trim() || null,
+          days: daysVal ? Number(daysVal) : null,
+          budget: budgetVal ? Number(budgetVal) : null,
+          language: document.getElementById("metaLanguage").value || "ko",
+          preferences,
+        };
+        setBusy(true);
+        try {
+          const response = await fetch(`/travel/sessions/${currentSessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!response.ok) throw new Error("세션 저장 실패");
+          const session = await response.json();
+          applySessionHeader(session);
+          metaEditor.classList.remove("open");
+          await refreshSessions();
+        } catch (error) {
+          addBubble(
+            error instanceof Error ? error.message : "세션 저장 실패",
+            "agent",
+            "error"
+          );
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      function openDrawer() {
+        drawer.classList.add("open");
+        drawerBackdrop.classList.add("open");
+        drawer.setAttribute("aria-hidden", "false");
+      }
+
+      function closePlaceDrawer() {
+        drawer.classList.remove("open");
+        drawerBackdrop.classList.remove("open");
+        drawer.setAttribute("aria-hidden", "true");
+      }
+
+      closeDrawer.addEventListener("click", closePlaceDrawer);
+      drawerBackdrop.addEventListener("click", closePlaceDrawer);
+
+      async function openPlace(poiId) {
+        placeTitle.textContent = "불러오는 중…";
+        placeBody.innerHTML = "";
+        openDrawer();
+        try {
+          const response = await fetch(`/travel/places/${encodeURIComponent(poiId)}`);
+          if (!response.ok) throw new Error("장소 정보를 찾을 수 없습니다.");
+          const place = await response.json();
+          placeTitle.textContent =
+            place.name_ko || place.name_en || place.poi_id || "장소 상세";
+          const fields = [
+            ["유형", place.travel_type],
+            ["지역", [place.region, place.city].filter(Boolean).join(" · ")],
+            ["주소", place.address_ko || place.address_en],
+            ["전화", place.phone],
+            ["운영시간", place.hours_ko || place.hours_en],
+            ["휴무", place.closed_ko],
+            ["요금", place.fee_ko || place.fee_en],
+            ["주차", place.parking_ko],
+            ["홈페이지", place.homepage],
+            ["체크인", place.checkin],
+            ["체크아웃", place.checkout],
+            ["출처", place.source],
+          ];
+          placeBody.innerHTML = "";
+          for (const [label, value] of fields) {
+            if (!value) continue;
+            const dt = document.createElement("dt");
+            dt.textContent = label;
+            const dd = document.createElement("dd");
+            if (label === "홈페이지" && String(value).startsWith("http")) {
+              const a = document.createElement("a");
+              a.href = value;
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              a.textContent = value;
+              dd.appendChild(a);
+            } else {
+              dd.textContent = value;
+            }
+            placeBody.appendChild(dt);
+            placeBody.appendChild(dd);
+          }
+        } catch (error) {
+          placeTitle.textContent = "오류";
+          placeBody.innerHTML = "";
+          const dd = document.createElement("dd");
+          dd.textContent =
+            error instanceof Error ? error.message : "장소 로드 실패";
+          placeBody.appendChild(dd);
+        }
+      }
+
+      function sessionQueryBody(question, extra = {}) {
+        const body = { question, ...extra };
+        if (currentSession) {
+          if (currentSession.destination) body.destination = currentSession.destination;
+          if (currentSession.days) body.days = currentSession.days;
+          if (currentSession.budget != null) body.budget = currentSession.budget;
+          if (currentSession.language) body.language = currentSession.language;
+          if (currentSession.preferences && currentSession.preferences.length) {
+            body.preferences = currentSession.preferences;
+          }
+        }
+        return body;
+      }
+
+      async function rewriteDay(day) {
+        if (!currentSessionId || busy) return;
+        const question = `${day}일차만 바꿔줘`;
+        addBubble(question, "user");
+        await runStreamQuery(question, { rewrite_day: day });
+      }
+
+      async function parseSseStream(response, handlers) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split("\n\n");
+          buffer = chunks.pop() || "";
+          for (const chunk of chunks) {
+            const lines = chunk.split("\n");
+            let event = "message";
+            const dataLines = [];
+            for (const line of lines) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+            }
+            if (!dataLines.length) continue;
+            let data;
+            try {
+              data = JSON.parse(dataLines.join("\n"));
+            } catch {
+              continue;
+            }
+            if (handlers[event]) handlers[event](data);
+          }
+        }
+      }
+
+      async function runStreamQuery(question, extra = {}) {
+        setBusy(true);
+        const pending = addBubble("답변을 작성하는 중…", "agent", "typing");
+        const answerEl = pending.querySelector(".answer-text");
+        let sawToken = false;
+
+        try {
+          const response = await fetch(
+            `/travel/sessions/${currentSessionId}/query/stream`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(sessionQueryBody(question, extra)),
+            }
+          );
+          if (!response.ok) throw new Error(`요청 실패 (${response.status})`);
+
+          await parseSseStream(response, {
+            status: (data) => {
+              if (!sawToken && answerEl) {
+                answerEl.textContent =
+                  STATUS_LABEL[data.stage] || "처리 중…";
+              }
+            },
+            token: (data) => {
+              if (!answerEl) return;
+              if (!sawToken) {
+                answerEl.textContent = "";
+                sawToken = true;
+                pending.classList.remove("typing");
+              }
+              answerEl.textContent += data.text || "";
+              chat.scrollTop = chat.scrollHeight;
+            },
+            done: (data) => {
+              fillAgentBubble(pending, data);
+              if (data.session) applySessionHeader(data.session);
+            },
+            error: (data) => {
+              throw new Error(data.message || "스트리밍 오류");
+            },
+          });
+          await refreshSessions();
+        } catch (error) {
+          pending.classList.remove("typing");
+          pending.classList.add("error");
+          pending.innerHTML = "";
+          const answer = document.createElement("div");
+          answer.className = "answer-text";
+          answer.textContent =
+            error instanceof Error
+              ? `오류: ${error.message}`
+              : "알 수 없는 오류가 발생했습니다.";
+          pending.appendChild(answer);
+        } finally {
+          setBusy(false);
+          input.focus();
+          chat.scrollTop = chat.scrollHeight;
         }
       }
 
@@ -583,57 +1392,19 @@
 
         addBubble(question, "user");
         input.value = "";
-        setBusy(true);
-        const pending = addBubble("답변을 작성하는 중…", "agent", "typing");
-
-        try {
-          const response = await fetch(
-            `/travel/sessions/${currentSessionId}/query`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ question }),
-            }
-          );
-
-          if (!response.ok) {
-            throw new Error(`요청 실패 (${response.status})`);
-          }
-
-          const data = await response.json();
-          pending.classList.remove("typing");
-          pending.textContent = data.answer || "답변을 받지 못했습니다.";
-          if (data.session?.title) {
-            subtitle.textContent = data.session.destination
-              ? `${data.session.title} · ${data.session.destination}`
-              : data.session.title;
-          }
-          await refreshSessions();
-        } catch (error) {
-          pending.classList.remove("typing");
-          pending.classList.add("error");
-          pending.textContent =
-            error instanceof Error
-              ? `오류: ${error.message}`
-              : "알 수 없는 오류가 발생했습니다.";
-        } finally {
-          setBusy(false);
-          input.focus();
-          chat.scrollTop = chat.scrollHeight;
-        }
+        await runStreamQuery(question);
       });
 
       (async function init() {
-        setBusy(true);
         try {
           const sessions = await refreshSessions();
           if (
             currentSessionId &&
             sessions.some((session) => session.id === currentSessionId)
           ) {
-            await selectSession(currentSessionId);
+            await selectSession(currentSessionId, { force: true });
           } else if (sessions.length) {
-            await selectSession(sessions[0].id);
+            await selectSession(sessions[0].id, { force: true });
           } else {
             currentSessionId = null;
             clearChat();

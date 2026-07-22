@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterator
 
 from src.travel.session_store import TravelSessionStore
-from src.travel.travel_graph import build_travel_graph
+from src.travel.travel_graph import build_travel_graph, stream_build_itinerary_tokens
 from src.travel.travel_tools import TravelSearchService
 
 
@@ -17,8 +17,26 @@ def get_travel_agent():
 
 
 @lru_cache
+def get_search_service() -> TravelSearchService:
+    return TravelSearchService()
+
+
+@lru_cache
 def get_session_store() -> TravelSessionStore:
     return TravelSessionStore()
+
+
+def _latest_itinerary(session_id: str) -> list[dict[str, Any]]:
+    store = get_session_store()
+    messages = store.list_messages(session_id)
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        payload = message.get("payload") or {}
+        itinerary = payload.get("itinerary")
+        if itinerary:
+            return list(itinerary)
+    return []
 
 
 def ask_travel(
@@ -30,6 +48,8 @@ def ask_travel(
     language: str | None = None,
     preferences: list[str] | None = None,
     history: str | None = None,
+    rewrite_day: int | None = None,
+    previous_itinerary: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     state: dict[str, Any] = {"query": question, "history": history or ""}
     if destination:
@@ -42,6 +62,10 @@ def ask_travel(
         state["language"] = language
     if preferences:
         state["preferences"] = preferences
+    if rewrite_day is not None:
+        state["rewrite_day"] = rewrite_day
+    if previous_itinerary:
+        state["previous_itinerary"] = previous_itinerary
 
     result = get_travel_agent().invoke(state)
     return {
@@ -57,37 +81,12 @@ def ask_travel(
         "courses": result.get("courses") or [],
         "warnings": result.get("warnings") or [],
         "sources": result.get("sources") or [],
+        "rewrite_day": result.get("rewrite_day"),
     }
 
 
-def ask_travel_in_session(
-    session_id: str,
-    question: str,
-    *,
-    destination: str | None = None,
-    days: int | None = None,
-    budget: int | None = None,
-    language: str | None = None,
-    preferences: list[str] | None = None,
-) -> dict[str, Any]:
+def _persist_session_result(session_id: str, question: str, result: dict[str, Any]) -> dict[str, Any]:
     store = get_session_store()
-    session = store.get_session(session_id)
-    if not session:
-        raise KeyError(f"session not found: {session_id}")
-
-    history = store.recent_history_text(session_id)
-    store.add_message(session_id, "user", question)
-
-    result = ask_travel(
-        question,
-        destination=destination or session.get("destination"),
-        days=days if days is not None else session.get("days"),
-        budget=budget if budget is not None else session.get("budget"),
-        language=language or session.get("language"),
-        preferences=preferences or session.get("preferences") or None,
-        history=history,
-    )
-
     store.add_message(
         session_id,
         "assistant",
@@ -113,3 +112,83 @@ def ask_travel_in_session(
     result["session_id"] = session_id
     result["session"] = updated
     return result
+
+
+def ask_travel_in_session(
+    session_id: str,
+    question: str,
+    *,
+    destination: str | None = None,
+    days: int | None = None,
+    budget: int | None = None,
+    language: str | None = None,
+    preferences: list[str] | None = None,
+    rewrite_day: int | None = None,
+) -> dict[str, Any]:
+    store = get_session_store()
+    session = store.get_session(session_id)
+    if not session:
+        raise KeyError(f"session not found: {session_id}")
+
+    history = store.recent_history_text(session_id)
+    previous_itinerary = _latest_itinerary(session_id)
+    store.add_message(session_id, "user", question)
+
+    result = ask_travel(
+        question,
+        destination=destination or session.get("destination"),
+        days=days if days is not None else session.get("days"),
+        budget=budget if budget is not None else session.get("budget"),
+        language=language or session.get("language"),
+        preferences=preferences or session.get("preferences") or None,
+        history=history,
+        rewrite_day=rewrite_day,
+        previous_itinerary=previous_itinerary or None,
+    )
+    return _persist_session_result(session_id, question, result)
+
+
+def stream_travel_in_session(
+    session_id: str,
+    question: str,
+    *,
+    destination: str | None = None,
+    days: int | None = None,
+    budget: int | None = None,
+    language: str | None = None,
+    preferences: list[str] | None = None,
+    rewrite_day: int | None = None,
+) -> Iterator[tuple[str, Any]]:
+    store = get_session_store()
+    session = store.get_session(session_id)
+    if not session:
+        raise KeyError(f"session not found: {session_id}")
+
+    history = store.recent_history_text(session_id)
+    previous_itinerary = _latest_itinerary(session_id)
+    store.add_message(session_id, "user", question)
+
+    state: dict[str, Any] = {
+        "query": question,
+        "history": history or "",
+        "destination": destination or session.get("destination"),
+        "days": days if days is not None else session.get("days"),
+        "budget": budget if budget is not None else session.get("budget"),
+        "language": language or session.get("language") or "ko",
+        "preferences": preferences or session.get("preferences") or [],
+    }
+    if rewrite_day is not None:
+        state["rewrite_day"] = rewrite_day
+    if previous_itinerary:
+        state["previous_itinerary"] = previous_itinerary
+
+    for event_type, payload in stream_build_itinerary_tokens(get_search_service(), state):
+        if event_type == "done":
+            result = {
+                "question": question,
+                **payload,
+            }
+            persisted = _persist_session_result(session_id, question, result)
+            yield ("done", persisted)
+        else:
+            yield (event_type, payload)

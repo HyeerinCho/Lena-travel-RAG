@@ -19,7 +19,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "budget": number|null,        // 원화 정수, 없으면 null
   "preferences": string[],      // 선호 키워드
   "language": "ko"|"en",
-  "place_types": string[]       // 가능하면 관광지/문화시설/음식점/숙박 중 선택
+  "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
+  "rewrite_day": number|null    // N일차만 재작성 요청이면 해당 일차, 아니면 null
 }}
 
 규칙:
@@ -28,6 +29,7 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - 영어 질문이면 language=en
 - 이번 질문에 새 값이 없으면 이전 대화/세션 값을 유지하세요
 - 후속 질문(예: "둘째 날만 바꿔줘")이면 destination/days 등을 비우지 말고 유지하세요
+- "N일차만", "둘째 날만", "day 2 only"처럼 특정 일차만 바꾸면 rewrite_day에 그 번호를 넣으세요
 
 이전 대화:
 {history}
@@ -87,4 +89,47 @@ answer에는 사용자가 바로 읽을 수 있는 일정 요약을 넣으세요
 Day1 / Day2 로 나누기
 장소는 불릿(-)으로
 마지막에 한 줄 팁 작성
+""")
+
+TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 일정 플래너입니다.
+전체 일정 중 {rewrite_day}일차만 다시 짜세요.
+다른 일차는 출력하지 마세요. 후보 장소/코스와 이전 대화만 근거로 답하세요.
+근거에 없는 운영시간, 입장료, 메뉴, 실시간 가격을 지어내지 마세요.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+현재 전체 일정(JSON):
+{previous_itinerary}
+
+사용자 요구:
+- 질문: {question}
+- 재작성 일차: {rewrite_day}
+- 목적지: {destination}
+- 예산: {budget}
+- 선호: {preferences}
+
+후보 장소(JSON):
+{places}
+
+후보 코스(JSON):
+{courses}
+
+다음 JSON만 출력하세요:
+{{
+  "day": {{
+    "day": {rewrite_day},
+    "theme": string,
+    "slots": [
+      {{"time": "morning|afternoon|evening", "place_name": string, "poi_id": string|null, "note": string}}
+    ]
+  }},
+  "warnings": string[],
+  "answer": string
+}}
+
+answer에는 {rewrite_day}일차 변경 요약만 넣으세요.
 """)
