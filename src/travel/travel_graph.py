@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 
 from src.config import LLM_MODEL
 from src.prompts import (
+    TRAVEL_CITY_LIST_PROMPT,
     TRAVEL_EXTRACT_PROMPT,
     TRAVEL_ITINERARY_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
@@ -35,6 +36,8 @@ class TravelState(TypedDict, total=False):
     answer: str
     rewrite_day: int | None
     previous_itinerary: list[dict[str, Any]]
+    intent: str
+    cities: list[dict[str, Any]]
 
 
 _ORDINAL_KO = {
@@ -91,6 +94,21 @@ def _heuristic_rewrite_day(query: str) -> int | None:
         if re.search(rf"{word}\s*날\s*(바꿔|수정|다시)", query):
             return day
     return None
+
+
+def _detect_city_list_intent(query: str) -> bool:
+    """True when the user wants a list of cities, not a day-by-day itinerary."""
+    if re.search(r"일정|코스|며칠|\d+\s*박|\d+\s*일차|day\s*\d", query, re.I):
+        return False
+    patterns = [
+        r"도시\s*(들|만|목록|리스트)",
+        r"(도시|지역).{0,6}(뽑아|추천|골라|알려|정리)",
+        r"(뽑아|추천|골라|알려|정리).{0,6}(도시|지역)",
+        r"(리스트|목록)\s*로\s*(뽑|만들|정리)",
+        r"어느\s*도시|어떤\s*도시|어디가?\s*좋",
+        r"city\s*list|list\s*of\s*cities",
+    ]
+    return any(re.search(p, query, re.I) for p in patterns)
 
 
 def _heuristic_extract(query: str) -> dict[str, Any]:
@@ -171,6 +189,7 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         "language": language,
         "place_types": place_types,
         "rewrite_day": _heuristic_rewrite_day(query),
+        "intent": "city_list" if _detect_city_list_intent(query) else "itinerary",
     }
 
 
@@ -215,6 +234,96 @@ def _focus_single_region(
     dominant = max(counts, key=lambda r: counts[r])
     focused = [p for p in places if _region_of(p) == dominant]
     return (focused or places), dominant
+
+
+def _group_places_by_city(
+    places: list[dict[str, Any]],
+    max_cities: int = 6,
+    max_per_city: int = 3,
+) -> list[dict[str, Any]]:
+    """Group candidate POIs by city for the city-list intent.
+
+    Order of cities follows first appearance (search relevance). Each city keeps up
+    to ``max_per_city`` place names, so the LLM can only pick from real candidates.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for p in places:
+        city = (p.get("city") or p.get("region") or "").strip()
+        if not city:
+            continue
+        name = p.get("name_ko") or p.get("name_en")
+        if not name:
+            continue
+        if city not in grouped:
+            grouped[city] = {
+                "city": city,
+                "region": p.get("region"),
+                "places": [],
+            }
+            order.append(city)
+        bucket = grouped[city]["places"]
+        if len(bucket) < max_per_city and all(
+            existing.get("poi_id") != p.get("poi_id") for existing in bucket
+        ):
+            bucket.append({"place_name": name, "poi_id": p.get("poi_id")})
+    return [grouped[c] for c in order[:max_cities]]
+
+
+def _build_city_list(
+    state: TravelState,
+    parsed: dict[str, Any],
+) -> TravelState:
+    """Merge LLM merits/answer with code-grouped city candidates (safe place names)."""
+    grouped = state.get("cities") or []
+    by_city = {g["city"]: g for g in grouped}
+
+    cities: list[dict[str, Any]] = []
+    for item in parsed.get("cities") or []:
+        city = (item.get("city") or "").strip()
+        source = by_city.get(city)
+        if source is None:
+            # Only trust cities we actually have candidates for.
+            continue
+        cities.append(
+            {
+                "city": city,
+                "region": source.get("region"),
+                "merit": item.get("merit") or "",
+                "places": source.get("places") or [],
+            }
+        )
+
+    # Fallback: if the model returned nothing usable, list grouped cities as-is.
+    if not cities:
+        cities = [
+            {
+                "city": g["city"],
+                "region": g.get("region"),
+                "merit": "",
+                "places": g.get("places") or [],
+            }
+            for g in grouped
+        ]
+
+    warnings = list(state.get("warnings") or [])
+    warnings.extend(parsed.get("warnings") or [])
+    answer = parsed.get("answer")
+    if not answer:
+        lines = []
+        for c in cities:
+            names = ", ".join(p["place_name"] for p in c["places"]) or "-"
+            merit = f" — {c['merit']}" if c.get("merit") else ""
+            lines.append(f"- {c['city']}{merit} (추천: {names})")
+        answer = "\n".join(lines) or "조건에 맞는 도시를 찾지 못했습니다."
+
+    return {
+        "cities": cities,
+        "warnings": warnings,
+        "answer": answer,
+        "sources": _build_sources(state),
+        "intent": "city_list",
+    }
 
 
 def _compact_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
@@ -429,6 +538,13 @@ def build_travel_graph(search: TravelSearchService):
         elif merged.get("rewrite_day") is None:
             merged["rewrite_day"] = _heuristic_rewrite_day(state["query"])
 
+        # city_list wins if either the heuristic or the LLM detects it.
+        merged["intent"] = (
+            "city_list"
+            if "city_list" in (base.get("intent"), parsed.get("intent"))
+            else "itinerary"
+        )
+
         if not merged.get("preferences"):
             merged["preferences"] = []
         if not merged.get("place_types"):
@@ -444,6 +560,27 @@ def build_travel_graph(search: TravelSearchService):
         query = " ".join(x for x in [state.get("query"), prefs] if x)
         destination = state.get("destination")
         types = state.get("place_types") or ["관광지", "문화시설"]
+
+        # City-list intent: gather a wide spread across many cities (no region focus).
+        if state.get("intent") == "city_list":
+            places = search.search_places(
+                query=query,
+                city=destination,
+                types=types,
+                limit=60,
+            )
+            if len(places) < 12:
+                places = search.search_places(
+                    query=query,
+                    city=destination,
+                    types=None,
+                    limit=60,
+                )
+            cities = _group_places_by_city(places)
+            warnings = []
+            if not cities:
+                warnings.append("조건에 맞는 도시를 충분히 찾지 못했습니다.")
+            return {"places": places, "courses": [], "warnings": warnings, "cities": cities}
 
         places = search.search_places(
             query=query,
@@ -487,6 +624,31 @@ def build_travel_graph(search: TravelSearchService):
         return result
 
     def build_itinerary(state: TravelState) -> TravelState:
+        if state.get("intent") == "city_list":
+            grouped = state.get("cities") or []
+            if not grouped:
+                return {
+                    "cities": [],
+                    "warnings": list(state.get("warnings") or []),
+                    "answer": "조건에 맞는 도시를 찾지 못했습니다. 조건을 조금 바꿔서 다시 물어봐 주세요.",
+                    "sources": _build_sources(state),
+                    "intent": "city_list",
+                }
+            try:
+                raw = (TRAVEL_CITY_LIST_PROMPT | llm).invoke(
+                    {
+                        "question": state.get("query"),
+                        "history": state.get("history") or "(없음)",
+                        "preferences": ", ".join(state.get("preferences") or []),
+                        "language": state.get("language") or "ko",
+                        "candidates": json.dumps(grouped, ensure_ascii=False),
+                    }
+                )
+                parsed = _extract_json(_llm_content(raw))
+            except Exception:
+                parsed = {}
+            return _build_city_list(state, parsed)
+
         places = _compact_places(state.get("places") or [])
         courses = _compact_courses(state.get("courses") or [])
         language = state.get("language") or "ko"
@@ -636,6 +798,11 @@ def stream_build_itinerary_tokens(
         merged["rewrite_day"] = result_so_far["rewrite_day"]
     elif merged.get("rewrite_day") is None:
         merged["rewrite_day"] = _heuristic_rewrite_day(result_so_far["query"])
+    merged["intent"] = (
+        "city_list"
+        if "city_list" in (base.get("intent"), parsed.get("intent"))
+        else "itinerary"
+    )
     if not merged.get("preferences"):
         merged["preferences"] = []
     if not merged.get("place_types"):
@@ -651,6 +818,52 @@ def stream_build_itinerary_tokens(
     query = " ".join(x for x in [result_so_far.get("query"), prefs] if x)
     destination = result_so_far.get("destination")
     types = result_so_far.get("place_types") or ["관광지", "문화시설"]
+
+    if result_so_far.get("intent") == "city_list":
+        places = search.search_places(query=query, city=destination, types=types, limit=60)
+        if len(places) < 12:
+            places = search.search_places(query=query, city=destination, types=None, limit=60)
+        grouped = _group_places_by_city(places)
+        warnings = [] if grouped else ["조건에 맞는 도시를 충분히 찾지 못했습니다."]
+        result_so_far["places"] = places
+        result_so_far["courses"] = []
+        result_so_far["cities"] = grouped
+        result_so_far["warnings"] = warnings
+
+        yield ("status", {"stage": "writing"})
+        if not grouped:
+            result_so_far.update(
+                {
+                    "cities": [],
+                    "answer": "조건에 맞는 도시를 찾지 못했습니다. 조건을 조금 바꿔서 다시 물어봐 주세요.",
+                    "sources": _build_sources(result_so_far),
+                }
+            )
+            yield ("done", _result_payload(result_so_far))
+            return
+
+        inputs = {
+            "question": result_so_far.get("query"),
+            "history": result_so_far.get("history") or "(없음)",
+            "preferences": ", ".join(result_so_far.get("preferences") or []),
+            "language": result_so_far.get("language") or "ko",
+            "candidates": json.dumps(grouped, ensure_ascii=False),
+        }
+        accumulated = ""
+        try:
+            for chunk in (TRAVEL_CITY_LIST_PROMPT | llm).stream(inputs):
+                piece = _llm_content(chunk)
+                if not piece:
+                    continue
+                accumulated += piece
+                yield ("token", {"text": piece})
+            parsed = _extract_json(accumulated)
+        except Exception:
+            parsed = {}
+        result_so_far.update(_build_city_list(result_so_far, parsed))
+        yield ("done", _result_payload(result_so_far))
+        return
+
     places = search.search_places(query=query, city=destination, types=types, limit=12)
     if len(places) < 4 and destination:
         places = search.search_places(query=query, city=destination, types=None, limit=12)
@@ -783,6 +996,8 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "preferences": state.get("preferences") or [],
         "language": state.get("language") or "ko",
         "itinerary": state.get("itinerary") or [],
+        "cities": state.get("cities") or [],
+        "intent": state.get("intent") or "itinerary",
         "places": state.get("places") or [],
         "courses": state.get("courses") or [],
         "warnings": state.get("warnings") or [],

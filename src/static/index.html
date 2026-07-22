@@ -461,6 +461,52 @@
         background: rgba(42, 122, 92, 0.18);
       }
 
+      .city-list {
+        list-style: none;
+        margin: 4px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .city-item {
+        border: 1px solid rgba(42, 122, 92, 0.18);
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: rgba(42, 122, 92, 0.04);
+      }
+
+      .city-head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+
+      .city-name {
+        font-weight: 700;
+        font-size: 0.98rem;
+      }
+
+      .city-merit {
+        margin-top: 4px;
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .city-places {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .city-place-empty {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+
       .empty {
         margin: auto;
         text-align: center;
@@ -779,12 +825,65 @@
 
       function renderPlanCards(data) {
         const itinerary = data.itinerary || [];
+        const cities = data.cities || [];
         const warnings = data.warnings || [];
         const sources = data.sources || [];
-        if (!itinerary.length && !warnings.length && !sources.length) return null;
+        if (!itinerary.length && !cities.length && !warnings.length && !sources.length)
+          return null;
 
         const wrap = document.createElement("div");
         wrap.className = "plan";
+
+        if (cities.length) {
+          const list = document.createElement("ol");
+          list.className = "city-list";
+          for (const c of cities) {
+            const li = document.createElement("li");
+            li.className = "city-item";
+
+            const head = document.createElement("div");
+            head.className = "city-head";
+            const name = document.createElement("span");
+            name.className = "city-name";
+            name.textContent = c.region && c.region !== c.city
+              ? `${c.city} · ${c.region}`
+              : c.city;
+            head.appendChild(name);
+            li.appendChild(head);
+
+            if (c.merit) {
+              const merit = document.createElement("div");
+              merit.className = "city-merit";
+              merit.textContent = c.merit;
+              li.appendChild(merit);
+            }
+
+            const places = c.places || [];
+            const chips = document.createElement("div");
+            chips.className = "city-places";
+            if (!places.length) {
+              const dash = document.createElement("span");
+              dash.className = "city-place-empty";
+              dash.textContent = "-";
+              chips.appendChild(dash);
+            } else {
+              for (const p of places.slice(0, 3)) {
+                const chip = document.createElement("span");
+                chip.className = "source-chip";
+                chip.textContent = p.place_name || "장소";
+                if (p.poi_id) {
+                  chip.classList.add("clickable");
+                  chip.title = "장소 상세 보기";
+                  chip.addEventListener("click", () => openPlace(p.poi_id));
+                }
+                chips.appendChild(chip);
+              }
+            }
+            li.appendChild(chips);
+            list.appendChild(li);
+          }
+          wrap.appendChild(list);
+        }
 
         if (itinerary.length) {
           const toolbar = document.createElement("div");
@@ -901,13 +1000,16 @@
         }
         const seenAlt = new Set();
         const altPlaces = [];
-        for (const s of sources) {
-          if (s.type && s.type !== "poi") continue;
-          if (!s.id || !s.name) continue;
-          const id = String(s.id);
-          if (usedPoiIds.has(id) || seenAlt.has(id)) continue;
-          seenAlt.add(id);
-          altPlaces.push(s);
+        // Only for itinerary mode; city-list already shows places per city.
+        if (!cities.length) {
+          for (const s of sources) {
+            if (s.type && s.type !== "poi") continue;
+            if (!s.id || !s.name) continue;
+            const id = String(s.id);
+            if (usedPoiIds.has(id) || seenAlt.has(id)) continue;
+            seenAlt.add(id);
+            altPlaces.push(s);
+          }
         }
 
         if (altPlaces.length) {
@@ -994,7 +1096,12 @@
           }
           const el = addBubble(message.content || "", "agent");
           const payload = message.payload || {};
-          if (payload.itinerary || payload.warnings || payload.sources) {
+          if (
+            payload.itinerary ||
+            payload.cities ||
+            payload.warnings ||
+            payload.sources
+          ) {
             fillAgentBubble(el, {
               answer: message.content,
               ...payload,

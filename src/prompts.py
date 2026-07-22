@@ -20,7 +20,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "preferences": string[],      // 선호 키워드
   "language": "ko"|"en",
   "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
-  "rewrite_day": number|null    // N일차만 재작성 요청이면 해당 일차, 아니면 null
+  "rewrite_day": number|null,   // N일차만 재작성 요청이면 해당 일차, 아니면 null
+  "intent": "itinerary"|"city_list"   // 아래 규칙 참고, 기본값 "itinerary"
 }}
 
 규칙:
@@ -32,6 +33,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - "N일차만", "둘째 날만", "day 2 only"처럼 특정 일차만 바꾸면 rewrite_day에 그 번호를 넣으세요
 - "아무곳이나", "어디든", "아무 데나 골라"처럼 목적지가 열려 있으면 한국 내 도시/권역 하나를 골라 destination에 넣으세요 (예: 부산, 제주, 강릉). 부산+제주처럼 멀리 떨어진 복수 목적지는 넣지 마세요
 - destination은 단일 도시 또는 인접 권역 하나만 (예: "경주", "부산", "제주")
+- intent: "OO하기 좋은 도시 리스트", "누구와 가기 좋은 도시만 뽑아줘"처럼 일정(코스)이 아니라 도시 목록을 원하면 "city_list". 그 외 일정/코스 요청은 "itinerary"
+- intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null로 두세요 (여러 도시를 비교해야 하므로)
 
 이전 대화:
 {history}
@@ -145,4 +148,45 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
 }}
 
 answer에는 {rewrite_day}일차 변경 요약만 넣으세요.
+""")
+
+TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 도시 추천 큐레이터입니다.
+사용자는 특정 조건(예: "여름에 가기 좋은", "아이와 가기 좋은")에 맞는 '도시 목록'을 원합니다.
+아래 후보 도시/장소 데이터만 근거로 답하세요.
+
+규칙(필수):
+- 후보 데이터(candidates)에 있는 도시만 사용하세요. 없는 도시를 지어내지 마세요.
+- 각 도시마다 사용자의 조건에 맞는 이유(merit)를 한 문장으로 간결하게 쓰세요. 근거에 없는 시설/가격/운영시간은 지어내지 마세요.
+- 장소 이름(place_name)은 반드시 candidates에 주어진 이름 그대로만 쓰고, 도시별 최대 3개까지만 고르세요. 없으면 빈 배열로 두세요.
+- 조건에 잘 맞는 순서대로 도시를 정렬하세요.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+사용자 요구:
+- 질문: {question}
+- 선호/조건: {preferences}
+
+후보(JSON, 도시별로 묶임):
+{candidates}
+
+다음 JSON만 출력하세요:
+{{
+  "cities": [
+    {{
+      "city": string,
+      "merit": string,
+      "places": [
+        {{"place_name": string, "poi_id": string|null}}
+      ]
+    }}
+  ],
+  "warnings": string[],
+  "answer": string
+}}
+
+answer에는 사용자가 바로 읽을 수 있는 짧은 도시 리스트 요약을 넣으세요.
 """)

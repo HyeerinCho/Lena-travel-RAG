@@ -48,6 +48,8 @@ class TravelQueryResponse(BaseModel):
     preferences: list[str] = []
     language: str = "ko"
     itinerary: list[dict[str, Any]] = []
+    cities: list[dict[str, Any]] = []
+    intent: str = "itinerary"
     places: list[dict[str, Any]] = []
     courses: list[dict[str, Any]] = []
     warnings: list[str] = []
