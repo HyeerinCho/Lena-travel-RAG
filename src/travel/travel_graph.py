@@ -16,6 +16,7 @@ from src.travel.travel_tools import TravelSearchService
 
 class TravelState(TypedDict, total=False):
     query: str
+    history: str
     destination: str | None
     days: int | None
     budget: int | None
@@ -228,13 +229,26 @@ def build_travel_graph(search: TravelSearchService):
 
     def extract_requirements(state: TravelState) -> TravelState:
         base = _heuristic_extract(state["query"])
-        # Allow pre-filled API fields to win
+        history = state.get("history") or "(없음)"
+        # Allow pre-filled API/session fields to win
         for key in ("destination", "days", "budget", "language", "preferences", "place_types"):
             if state.get(key) not in (None, [], ""):
                 base[key] = state[key]
 
         try:
-            raw = (TRAVEL_EXTRACT_PROMPT | llm).invoke({"question": state["query"]})
+            raw = (TRAVEL_EXTRACT_PROMPT | llm).invoke(
+                {
+                    "question": state["query"],
+                    "history": history,
+                    "session_destination": state.get("destination") or base.get("destination"),
+                    "session_days": state.get("days") or base.get("days"),
+                    "session_budget": state.get("budget") or base.get("budget"),
+                    "session_preferences": ", ".join(
+                        state.get("preferences") or base.get("preferences") or []
+                    )
+                    or "(없음)",
+                }
+            )
             content = getattr(raw, "content", raw)
             parsed = _extract_json(str(content))
         except Exception:
@@ -243,9 +257,16 @@ def build_travel_graph(search: TravelSearchService):
         merged = {**base}
         for key in ("destination", "days", "budget", "language", "preferences", "place_types"):
             if parsed.get(key) not in (None, [], ""):
-                # keep explicit state overrides
+                # keep explicit state overrides from API/session seed
                 if state.get(key) in (None, [], ""):
                     merged[key] = parsed[key]
+
+        # Carry forward session values when the follow-up omits them
+        for key in ("destination", "days", "budget", "language"):
+            if merged.get(key) in (None, "", []) and state.get(key) not in (None, "", []):
+                merged[key] = state[key]
+        if not merged.get("preferences") and state.get("preferences"):
+            merged["preferences"] = state["preferences"]
 
         if not merged.get("preferences"):
             merged["preferences"] = []
@@ -304,6 +325,7 @@ def build_travel_graph(search: TravelSearchService):
             raw = (TRAVEL_ITINERARY_PROMPT | llm).invoke(
                 {
                     "question": state.get("query"),
+                    "history": state.get("history") or "(없음)",
                     "destination": state.get("destination"),
                     "days": state.get("days") or 1,
                     "budget": state.get("budget"),
