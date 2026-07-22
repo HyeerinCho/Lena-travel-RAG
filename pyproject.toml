@@ -26,7 +26,12 @@ dependencies = [
 ]
 
 [tool.setuptools]
-script-files = ["scripts/lena", "scripts/lena-api", "scripts/lena-travel", "scripts/build_travel_index.py"]
+script-files = [
+    "scripts/CLI/lena",
+    "scripts/CLI/lena-api",
+    "scripts/CLI/lena-travel",
+    "scripts/build_travel_index.py",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
