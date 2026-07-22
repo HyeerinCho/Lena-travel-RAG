@@ -16,6 +16,7 @@ from src.prompts import (
     TRAVEL_ITINERARY_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
 )
+from src.travel.travel_repository import city_match_values
 from src.travel.travel_tools import TravelSearchService
 
 
@@ -38,6 +39,7 @@ class TravelState(TypedDict, total=False):
     previous_itinerary: list[dict[str, Any]]
     intent: str
     cities: list[dict[str, Any]]
+    exclude_cities: list[str]
 
 
 _ORDINAL_KO = {
@@ -150,11 +152,28 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         ("Seoul", "서울"),
         ("Busan", "부산"),
     ]
+    lower = query.lower()
+    exclude_cities: list[str] = []
     destination = None
-    for needle, canon in city_aliases:
-        if needle.lower() in query.lower():
-            destination = canon
-            break
+    neg = re.search(r"(말고|빼고|제외|이외|except|other\s+than)", query, re.I)
+    if neg:
+        # Cities before the negation marker are excluded; a city after it (if any)
+        # becomes the positive destination. e.g. "서울 말고 부산" -> exclude 서울, dest 부산
+        neg_pos = neg.start()
+        for needle, canon in city_aliases:
+            idx = lower.find(needle.lower())
+            if idx == -1:
+                continue
+            if idx < neg_pos:
+                if canon not in exclude_cities:
+                    exclude_cities.append(canon)
+            elif destination is None:
+                destination = canon
+    else:
+        for needle, canon in city_aliases:
+            if needle.lower() in lower:
+                destination = canon
+                break
 
     preferences = []
     pref_map = {
@@ -190,7 +209,37 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         "place_types": place_types,
         "rewrite_day": _heuristic_rewrite_day(query),
         "intent": "city_list" if _detect_city_list_intent(query) else "itinerary",
+        "exclude_cities": exclude_cities,
     }
+
+
+def _drop_excluded(
+    places: list[dict[str, Any]],
+    exclude_cities: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Remove POIs located in cities the user asked to exclude ("서울 말고 ...")."""
+    if not exclude_cities:
+        return places
+    needles: set[str] = set()
+    for city in exclude_cities:
+        for alias in city_match_values(city):
+            alias = alias.strip()
+            if alias:
+                needles.add(alias)
+                needles.add(alias.lower())
+    if not needles:
+        return places
+
+    out: list[dict[str, Any]] = []
+    for p in places:
+        blob = " ".join(
+            str(p.get(k) or "") for k in ("city", "region", "address_ko")
+        )
+        blob_lower = blob.lower()
+        if any(n in blob or n in blob_lower for n in needles):
+            continue
+        out.append(p)
+    return out
 
 
 def _focus_single_region(
@@ -545,6 +594,14 @@ def build_travel_graph(search: TravelSearchService):
             else "itinerary"
         )
 
+        excluded = list(base.get("exclude_cities") or [])
+        for c in parsed.get("exclude_cities") or []:
+            if c and c not in excluded:
+                excluded.append(c)
+        merged["exclude_cities"] = excluded
+        if merged.get("destination") and merged["destination"] in excluded:
+            merged["destination"] = None
+
         if not merged.get("preferences"):
             merged["preferences"] = []
         if not merged.get("place_types"):
@@ -560,6 +617,7 @@ def build_travel_graph(search: TravelSearchService):
         query = " ".join(x for x in [state.get("query"), prefs] if x)
         destination = state.get("destination")
         types = state.get("place_types") or ["관광지", "문화시설"]
+        exclude_cities = state.get("exclude_cities") or []
 
         # City-list intent: gather a wide spread across many cities (no region focus).
         if state.get("intent") == "city_list":
@@ -576,6 +634,7 @@ def build_travel_graph(search: TravelSearchService):
                     types=None,
                     limit=60,
                 )
+            places = _drop_excluded(places, exclude_cities)
             cities = _group_places_by_city(places)
             warnings = []
             if not cities:
@@ -596,6 +655,7 @@ def build_travel_graph(search: TravelSearchService):
                 limit=12,
             )
 
+        places = _drop_excluded(places, exclude_cities)
         places, focused_destination = _focus_single_region(places, destination)
         if focused_destination and not destination:
             destination = focused_destination
@@ -803,6 +863,13 @@ def stream_build_itinerary_tokens(
         if "city_list" in (base.get("intent"), parsed.get("intent"))
         else "itinerary"
     )
+    excluded = list(base.get("exclude_cities") or [])
+    for c in parsed.get("exclude_cities") or []:
+        if c and c not in excluded:
+            excluded.append(c)
+    merged["exclude_cities"] = excluded
+    if merged.get("destination") and merged["destination"] in excluded:
+        merged["destination"] = None
     if not merged.get("preferences"):
         merged["preferences"] = []
     if not merged.get("place_types"):
@@ -818,11 +885,13 @@ def stream_build_itinerary_tokens(
     query = " ".join(x for x in [result_so_far.get("query"), prefs] if x)
     destination = result_so_far.get("destination")
     types = result_so_far.get("place_types") or ["관광지", "문화시설"]
+    exclude_cities = result_so_far.get("exclude_cities") or []
 
     if result_so_far.get("intent") == "city_list":
         places = search.search_places(query=query, city=destination, types=types, limit=60)
         if len(places) < 12:
             places = search.search_places(query=query, city=destination, types=None, limit=60)
+        places = _drop_excluded(places, exclude_cities)
         grouped = _group_places_by_city(places)
         warnings = [] if grouped else ["조건에 맞는 도시를 충분히 찾지 못했습니다."]
         result_so_far["places"] = places
@@ -868,6 +937,7 @@ def stream_build_itinerary_tokens(
     if len(places) < 4 and destination:
         places = search.search_places(query=query, city=destination, types=None, limit=12)
 
+    places = _drop_excluded(places, exclude_cities)
     places, focused_destination = _focus_single_region(places, destination)
     if focused_destination:
         destination = focused_destination

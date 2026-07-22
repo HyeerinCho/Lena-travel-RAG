@@ -21,7 +21,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "language": "ko"|"en",
   "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
   "rewrite_day": number|null,   // N일차만 재작성 요청이면 해당 일차, 아니면 null
-  "intent": "itinerary"|"city_list"   // 아래 규칙 참고, 기본값 "itinerary"
+  "intent": "itinerary"|"city_list",  // 아래 규칙 참고, 기본값 "itinerary"
+  "exclude_cities": string[]    // 사용자가 "빼고/말고/제외"라고 한 도시들 (예: ["서울","부산"])
 }}
 
 규칙:
@@ -35,6 +36,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - destination은 단일 도시 또는 인접 권역 하나만 (예: "경주", "부산", "제주")
 - intent: "OO하기 좋은 도시 리스트", "누구와 가기 좋은 도시만 뽑아줘"처럼 일정(코스)이 아니라 도시 목록을 원하면 "city_list". 그 외 일정/코스 요청은 "itinerary"
 - intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null로 두세요 (여러 도시를 비교해야 하므로)
+- "서울 말고", "부산 빼고", "제주 제외한 다른 곳"처럼 특정 도시를 빼달라고 하면 그 도시들을 exclude_cities에 넣고, 그 도시는 destination으로 넣지 마세요. "서울 말고 다른 도시"의 destination은 null입니다
+- exclude_cities에 넣은 도시는 절대 destination이나 추천에 포함하지 마세요
 
 이전 대화:
 {history}
