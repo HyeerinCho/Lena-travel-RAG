@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, TypedDict
+from typing import Any, Iterator, TypedDict
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 
 from src.config import LLM_MODEL
-from src.prompts import TRAVEL_EXTRACT_PROMPT, TRAVEL_ITINERARY_PROMPT
+from src.prompts import (
+    TRAVEL_EXTRACT_PROMPT,
+    TRAVEL_ITINERARY_PROMPT,
+    TRAVEL_REWRITE_DAY_PROMPT,
+)
 from src.travel.travel_tools import TravelSearchService
 
 
@@ -29,6 +33,26 @@ class TravelState(TypedDict, total=False):
     warnings: list[str]
     sources: list[dict[str, Any]]
     answer: str
+    rewrite_day: int | None
+    previous_itinerary: list[dict[str, Any]]
+
+
+_ORDINAL_KO = {
+    "첫": 1,
+    "첫째": 1,
+    "두": 2,
+    "둘째": 2,
+    "세": 3,
+    "셋째": 3,
+    "네": 4,
+    "넷째": 4,
+    "다섯": 5,
+    "다섯째": 5,
+    "여섯": 6,
+    "여섯째": 6,
+    "일곱": 7,
+    "일곱째": 7,
+}
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -46,6 +70,27 @@ def _extract_json(text: str) -> dict[str, Any]:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             return {}
+
+
+def _heuristic_rewrite_day(query: str) -> int | None:
+    patterns = [
+        r"(\d+)\s*일차\s*만",
+        r"day\s*(\d+)\s*only",
+        r"only\s*day\s*(\d+)",
+        r"(\d+)\s*일\s*만\s*(바꿔|수정|다시|재작성)",
+        r"(\d+)\s*일차\s*(바꿔|수정|다시|재작성)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, query, re.I)
+        if m:
+            return int(m.group(1))
+
+    for word, day in _ORDINAL_KO.items():
+        if re.search(rf"{word}\s*날\s*만", query):
+            return day
+        if re.search(rf"{word}\s*날\s*(바꿔|수정|다시)", query):
+            return day
+    return None
 
 
 def _heuristic_extract(query: str) -> dict[str, Any]:
@@ -125,6 +170,7 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         "preferences": preferences,
         "language": language,
         "place_types": place_types,
+        "rewrite_day": _heuristic_rewrite_day(query),
     }
 
 
@@ -224,14 +270,77 @@ def _fallback_itinerary(state: TravelState) -> dict[str, Any]:
     }
 
 
+def _merge_day_into_itinerary(
+    previous: list[dict[str, Any]],
+    day_num: int,
+    new_day: dict[str, Any],
+) -> list[dict[str, Any]]:
+    merged = [dict(d) for d in previous]
+    replacement = {
+        "day": day_num,
+        "theme": new_day.get("theme") or f"Day {day_num}",
+        "slots": new_day.get("slots") or [],
+    }
+    replaced = False
+    for i, day in enumerate(merged):
+        if int(day.get("day") or 0) == day_num:
+            merged[i] = replacement
+            replaced = True
+            break
+    if not replaced:
+        merged.append(replacement)
+        merged.sort(key=lambda d: int(d.get("day") or 0))
+    return merged
+
+
+def _build_sources(state: TravelState) -> list[dict[str, Any]]:
+    sources = [
+        {"type": "poi", "id": p.get("poi_id"), "name": p.get("name_ko") or p.get("name_en")}
+        for p in (state.get("places") or [])
+        if p.get("poi_id")
+    ]
+    sources += [
+        {
+            "type": "course",
+            "id": c.get("package_id"),
+            "name": c.get("title"),
+        }
+        for c in (state.get("courses") or [])
+        if c.get("package_id") or c.get("title")
+    ]
+    return sources
+
+
+def _llm_content(raw: Any) -> str:
+    content = getattr(raw, "content", raw)
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and "text" in block:
+                parts.append(str(block["text"]))
+            else:
+                parts.append(str(getattr(block, "text", block)))
+        return "".join(parts)
+    return str(content)
+
+
 def build_travel_graph(search: TravelSearchService):
     llm = ChatGoogleGenerativeAI(model=LLM_MODEL, temperature=0.2)
 
     def extract_requirements(state: TravelState) -> TravelState:
         base = _heuristic_extract(state["query"])
         history = state.get("history") or "(없음)"
-        # Allow pre-filled API/session fields to win
-        for key in ("destination", "days", "budget", "language", "preferences", "place_types"):
+        for key in (
+            "destination",
+            "days",
+            "budget",
+            "language",
+            "preferences",
+            "place_types",
+            "rewrite_day",
+        ):
             if state.get(key) not in (None, [], ""):
                 base[key] = state[key]
 
@@ -249,24 +358,33 @@ def build_travel_graph(search: TravelSearchService):
                     or "(없음)",
                 }
             )
-            content = getattr(raw, "content", raw)
-            parsed = _extract_json(str(content))
+            parsed = _extract_json(_llm_content(raw))
         except Exception:
             parsed = {}
 
         merged = {**base}
-        for key in ("destination", "days", "budget", "language", "preferences", "place_types"):
+        for key in (
+            "destination",
+            "days",
+            "budget",
+            "language",
+            "preferences",
+            "place_types",
+            "rewrite_day",
+        ):
             if parsed.get(key) not in (None, [], ""):
-                # keep explicit state overrides from API/session seed
                 if state.get(key) in (None, [], ""):
                     merged[key] = parsed[key]
 
-        # Carry forward session values when the follow-up omits them
         for key in ("destination", "days", "budget", "language"):
             if merged.get(key) in (None, "", []) and state.get(key) not in (None, "", []):
                 merged[key] = state[key]
         if not merged.get("preferences") and state.get("preferences"):
             merged["preferences"] = state["preferences"]
+        if state.get("rewrite_day") is not None:
+            merged["rewrite_day"] = state["rewrite_day"]
+        elif merged.get("rewrite_day") is None:
+            merged["rewrite_day"] = _heuristic_rewrite_day(state["query"])
 
         if not merged.get("preferences"):
             merged["preferences"] = []
@@ -274,6 +392,8 @@ def build_travel_graph(search: TravelSearchService):
             merged["place_types"] = ["관광지", "문화시설"]
         if not merged.get("language"):
             merged["language"] = "ko"
+        if "previous_itinerary" in state:
+            merged["previous_itinerary"] = state["previous_itinerary"]
         return merged
 
     def search_candidates(state: TravelState) -> TravelState:
@@ -288,7 +408,6 @@ def build_travel_graph(search: TravelSearchService):
             types=types,
             limit=12,
         )
-        # If too few, relax types
         if len(places) < 4 and destination:
             places = search.search_places(
                 query=query,
@@ -317,11 +436,52 @@ def build_travel_graph(search: TravelSearchService):
         places = _compact_places(state.get("places") or [])
         courses = _compact_courses(state.get("courses") or [])
         language = state.get("language") or "ko"
+        rewrite_day = state.get("rewrite_day")
+        previous = list(state.get("previous_itinerary") or [])
 
         if not places and not courses:
             return _fallback_itinerary(state)
 
         try:
+            if rewrite_day and previous:
+                raw = (TRAVEL_REWRITE_DAY_PROMPT | llm).invoke(
+                    {
+                        "question": state.get("query"),
+                        "history": state.get("history") or "(없음)",
+                        "destination": state.get("destination"),
+                        "budget": state.get("budget"),
+                        "preferences": ", ".join(state.get("preferences") or []),
+                        "language": language,
+                        "rewrite_day": rewrite_day,
+                        "previous_itinerary": json.dumps(previous, ensure_ascii=False),
+                        "places": json.dumps(places, ensure_ascii=False),
+                        "courses": json.dumps(courses, ensure_ascii=False),
+                    }
+                )
+                parsed = _extract_json(_llm_content(raw))
+                new_day = parsed.get("day") or {}
+                warnings = list(state.get("warnings") or [])
+                if not new_day.get("slots"):
+                    warnings.append(f"{rewrite_day}일차 재작성에 실패해 기존 일정을 유지합니다.")
+                    return {
+                        "itinerary": previous,
+                        "warnings": warnings,
+                        "answer": parsed.get("answer")
+                        or f"{rewrite_day}일차를 바꾸지 못했습니다. 다른 표현으로 다시 요청해 주세요.",
+                        "sources": _build_sources(state),
+                        "rewrite_day": rewrite_day,
+                    }
+                itinerary = _merge_day_into_itinerary(previous, int(rewrite_day), new_day)
+                warnings.extend(parsed.get("warnings") or [])
+                answer = parsed.get("answer") or f"{rewrite_day}일차 일정을 수정했습니다."
+                return {
+                    "itinerary": itinerary,
+                    "warnings": warnings,
+                    "answer": answer,
+                    "sources": _build_sources(state),
+                    "rewrite_day": rewrite_day,
+                }
+
             raw = (TRAVEL_ITINERARY_PROMPT | llm).invoke(
                 {
                     "question": state.get("query"),
@@ -335,37 +495,20 @@ def build_travel_graph(search: TravelSearchService):
                     "courses": json.dumps(courses, ensure_ascii=False),
                 }
             )
-            content = getattr(raw, "content", raw)
-            parsed = _extract_json(str(content))
+            parsed = _extract_json(_llm_content(raw))
         except Exception:
             parsed = {}
 
         if not parsed.get("answer"):
-            fallback = _fallback_itinerary(state)
-            return fallback
+            return _fallback_itinerary(state)
 
         warnings = list(state.get("warnings") or [])
         warnings.extend(parsed.get("warnings") or [])
-        sources = [
-            {"type": "poi", "id": p.get("poi_id"), "name": p.get("name_ko") or p.get("name_en")}
-            for p in (state.get("places") or [])
-            if p.get("poi_id")
-        ]
-        sources += [
-            {
-                "type": "course",
-                "id": c.get("package_id"),
-                "name": c.get("title"),
-            }
-            for c in (state.get("courses") or [])
-            if c.get("package_id") or c.get("title")
-        ]
-
         return {
             "itinerary": parsed.get("itinerary") or [],
             "warnings": warnings,
             "answer": parsed["answer"],
-            "sources": sources,
+            "sources": _build_sources(state),
         }
 
     graph = StateGraph(TravelState)
@@ -377,3 +520,213 @@ def build_travel_graph(search: TravelSearchService):
     graph.add_edge("search_candidates", "build_itinerary")
     graph.add_edge("build_itinerary", END)
     return graph.compile()
+
+
+def stream_build_itinerary_tokens(
+    search: TravelSearchService,
+    state: TravelState,
+) -> Iterator[tuple[str, Any]]:
+    """Yield (event_type, payload) for SSE. Runs extract+search sync, streams LLM."""
+    llm = ChatGoogleGenerativeAI(model=LLM_MODEL, temperature=0.2)
+    result_so_far: TravelState = dict(state)
+
+    yield ("status", {"stage": "extracting"})
+    base = _heuristic_extract(result_so_far["query"])
+    for key in (
+        "destination",
+        "days",
+        "budget",
+        "language",
+        "preferences",
+        "place_types",
+        "rewrite_day",
+    ):
+        if result_so_far.get(key) not in (None, [], ""):
+            base[key] = result_so_far[key]
+    try:
+        raw = (TRAVEL_EXTRACT_PROMPT | llm).invoke(
+            {
+                "question": result_so_far["query"],
+                "history": result_so_far.get("history") or "(없음)",
+                "session_destination": result_so_far.get("destination") or base.get("destination"),
+                "session_days": result_so_far.get("days") or base.get("days"),
+                "session_budget": result_so_far.get("budget") or base.get("budget"),
+                "session_preferences": ", ".join(
+                    result_so_far.get("preferences") or base.get("preferences") or []
+                )
+                or "(없음)",
+            }
+        )
+        parsed = _extract_json(_llm_content(raw))
+    except Exception:
+        parsed = {}
+    merged = {**base}
+    for key in (
+        "destination",
+        "days",
+        "budget",
+        "language",
+        "preferences",
+        "place_types",
+        "rewrite_day",
+    ):
+        if parsed.get(key) not in (None, [], ""):
+            if result_so_far.get(key) in (None, [], ""):
+                merged[key] = parsed[key]
+    for key in ("destination", "days", "budget", "language"):
+        if merged.get(key) in (None, "", []) and result_so_far.get(key) not in (None, "", []):
+            merged[key] = result_so_far[key]
+    if not merged.get("preferences") and result_so_far.get("preferences"):
+        merged["preferences"] = result_so_far["preferences"]
+    if result_so_far.get("rewrite_day") is not None:
+        merged["rewrite_day"] = result_so_far["rewrite_day"]
+    elif merged.get("rewrite_day") is None:
+        merged["rewrite_day"] = _heuristic_rewrite_day(result_so_far["query"])
+    if not merged.get("preferences"):
+        merged["preferences"] = []
+    if not merged.get("place_types"):
+        merged["place_types"] = ["관광지", "문화시설"]
+    if not merged.get("language"):
+        merged["language"] = "ko"
+    if "previous_itinerary" in result_so_far:
+        merged["previous_itinerary"] = result_so_far["previous_itinerary"]
+    result_so_far.update(merged)
+
+    yield ("status", {"stage": "searching"})
+    prefs = " ".join(result_so_far.get("preferences") or [])
+    query = " ".join(x for x in [result_so_far.get("query"), prefs] if x)
+    destination = result_so_far.get("destination")
+    types = result_so_far.get("place_types") or ["관광지", "문화시설"]
+    places = search.search_places(query=query, city=destination, types=types, limit=12)
+    if len(places) < 4 and destination:
+        places = search.search_places(query=query, city=destination, types=None, limit=12)
+    courses = search.search_courses(
+        city=destination,
+        days=result_so_far.get("days"),
+        budget=result_so_far.get("budget"),
+        query=query,
+        limit=8,
+    )
+    warnings: list[str] = []
+    if not places:
+        warnings.append("조건에 맞는 POI가 충분하지 않습니다.")
+    if result_so_far.get("budget") is not None and courses:
+        warnings.append("코스 가격은 과거 상품 참고값입니다.")
+    result_so_far["places"] = places
+    result_so_far["courses"] = courses
+    result_so_far["warnings"] = warnings
+
+    yield ("status", {"stage": "writing"})
+
+    compact_places = _compact_places(places)
+    compact_courses = _compact_courses(courses)
+    language = result_so_far.get("language") or "ko"
+    rewrite_day = result_so_far.get("rewrite_day")
+    previous = list(result_so_far.get("previous_itinerary") or [])
+
+    if not compact_places and not compact_courses:
+        fallback = _fallback_itinerary(result_so_far)
+        result_so_far.update(fallback)
+        yield ("done", _result_payload(result_so_far))
+        return
+
+    if rewrite_day and previous:
+        prompt = TRAVEL_REWRITE_DAY_PROMPT
+        inputs = {
+            "question": result_so_far.get("query"),
+            "history": result_so_far.get("history") or "(없음)",
+            "destination": result_so_far.get("destination"),
+            "budget": result_so_far.get("budget"),
+            "preferences": ", ".join(result_so_far.get("preferences") or []),
+            "language": language,
+            "rewrite_day": rewrite_day,
+            "previous_itinerary": json.dumps(previous, ensure_ascii=False),
+            "places": json.dumps(compact_places, ensure_ascii=False),
+            "courses": json.dumps(compact_courses, ensure_ascii=False),
+        }
+    else:
+        prompt = TRAVEL_ITINERARY_PROMPT
+        inputs = {
+            "question": result_so_far.get("query"),
+            "history": result_so_far.get("history") or "(없음)",
+            "destination": result_so_far.get("destination"),
+            "days": result_so_far.get("days") or 1,
+            "budget": result_so_far.get("budget"),
+            "preferences": ", ".join(result_so_far.get("preferences") or []),
+            "language": language,
+            "places": json.dumps(compact_places, ensure_ascii=False),
+            "courses": json.dumps(compact_courses, ensure_ascii=False),
+        }
+
+    accumulated = ""
+    try:
+        for chunk in (prompt | llm).stream(inputs):
+            piece = _llm_content(chunk)
+            if not piece:
+                continue
+            accumulated += piece
+            yield ("token", {"text": piece})
+        parsed = _extract_json(accumulated)
+    except Exception:
+        parsed = {}
+
+    if rewrite_day and previous:
+        new_day = parsed.get("day") or {}
+        w = list(result_so_far.get("warnings") or [])
+        if not new_day.get("slots"):
+            w.append(f"{rewrite_day}일차 재작성에 실패해 기존 일정을 유지합니다.")
+            result_so_far.update(
+                {
+                    "itinerary": previous,
+                    "warnings": w,
+                    "answer": parsed.get("answer")
+                    or f"{rewrite_day}일차를 바꾸지 못했습니다. 다른 표현으로 다시 요청해 주세요.",
+                    "sources": _build_sources(result_so_far),
+                    "rewrite_day": rewrite_day,
+                }
+            )
+        else:
+            itinerary = _merge_day_into_itinerary(previous, int(rewrite_day), new_day)
+            w.extend(parsed.get("warnings") or [])
+            result_so_far.update(
+                {
+                    "itinerary": itinerary,
+                    "warnings": w,
+                    "answer": parsed.get("answer") or f"{rewrite_day}일차 일정을 수정했습니다.",
+                    "sources": _build_sources(result_so_far),
+                    "rewrite_day": rewrite_day,
+                }
+            )
+    elif not parsed.get("answer"):
+        fallback = _fallback_itinerary(result_so_far)
+        result_so_far.update(fallback)
+    else:
+        w = list(result_so_far.get("warnings") or [])
+        w.extend(parsed.get("warnings") or [])
+        result_so_far.update(
+            {
+                "itinerary": parsed.get("itinerary") or [],
+                "warnings": w,
+                "answer": parsed["answer"],
+                "sources": _build_sources(result_so_far),
+            }
+        )
+
+    yield ("done", _result_payload(result_so_far))
+
+
+def _result_payload(state: TravelState) -> dict[str, Any]:
+    return {
+        "destination": state.get("destination"),
+        "days": state.get("days"),
+        "budget": state.get("budget"),
+        "preferences": state.get("preferences") or [],
+        "language": state.get("language") or "ko",
+        "itinerary": state.get("itinerary") or [],
+        "places": state.get("places") or [],
+        "courses": state.get("courses") or [],
+        "warnings": state.get("warnings") or [],
+        "sources": state.get("sources") or [],
+        "answer": state.get("answer") or "",
+        "rewrite_day": state.get("rewrite_day"),
+    }

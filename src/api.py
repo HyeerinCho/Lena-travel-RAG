@@ -1,15 +1,18 @@
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.rag import ask
 from src.travel.travel_agent import (
     ask_travel,
     ask_travel_in_session,
+    get_search_service,
     get_session_store,
+    stream_travel_in_session,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -33,6 +36,7 @@ class TravelQueryRequest(BaseModel):
     budget: int | None = Field(default=None, ge=0)
     language: str | None = Field(default=None, pattern="^(ko|en)$")
     preferences: list[str] | None = None
+    rewrite_day: int | None = Field(default=None, ge=1, le=30)
 
 
 class TravelQueryResponse(BaseModel):
@@ -50,10 +54,20 @@ class TravelQueryResponse(BaseModel):
     sources: list[dict[str, Any]] = []
     session_id: str | None = None
     session: dict[str, Any] | None = None
+    rewrite_day: int | None = None
 
 
 class CreateSessionRequest(BaseModel):
     title: str | None = None
+
+
+class UpdateSessionRequest(BaseModel):
+    title: str | None = None
+    destination: str | None = None
+    days: int | None = Field(default=None, ge=1, le=30)
+    budget: int | None = Field(default=None, ge=0)
+    language: str | None = Field(default=None, pattern="^(ko|en)$")
+    preferences: list[str] | None = None
 
 
 class SessionSummary(BaseModel):
@@ -82,6 +96,10 @@ class SessionDetail(SessionSummary):
     messages: list[SessionMessage] = []
 
 
+def _sse(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @app.get("/")
 def root():
     return FileResponse(STATIC_DIR / "index.html")
@@ -97,6 +115,8 @@ def api_info():
             "/travel/sessions",
             "/travel/sessions/{session_id}",
             "/travel/sessions/{session_id}/query",
+            "/travel/sessions/{session_id}/query/stream",
+            "/travel/places/{poi_id}",
         ],
     }
 
@@ -116,8 +136,17 @@ def travel_query(request: TravelQueryRequest) -> TravelQueryResponse:
         budget=request.budget,
         language=request.language,
         preferences=request.preferences,
+        rewrite_day=request.rewrite_day,
     )
     return TravelQueryResponse(**result)
+
+
+@app.get("/travel/places/{poi_id}")
+def get_place(poi_id: str) -> dict[str, Any]:
+    place = get_search_service().get_place_details(poi_id)
+    if not place:
+        raise HTTPException(status_code=404, detail="장소를 찾을 수 없습니다.")
+    return place
 
 
 @app.get("/travel/sessions", response_model=list[SessionSummary])
@@ -146,6 +175,27 @@ def get_travel_session(session_id: str) -> SessionDetail:
     return SessionDetail(**detail)
 
 
+@app.patch("/travel/sessions/{session_id}", response_model=SessionSummary)
+def update_travel_session(
+    session_id: str, request: UpdateSessionRequest
+) -> SessionSummary:
+    store = get_session_store()
+    updated = store.update_session_meta(
+        session_id,
+        title=request.title,
+        destination=request.destination,
+        days=request.days,
+        budget=request.budget,
+        language=request.language,
+        preferences=request.preferences,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    detail = store.get_session_detail(session_id) or {}
+    updated["message_count"] = len(detail.get("messages") or [])
+    return SessionSummary(**updated)
+
+
 @app.delete("/travel/sessions/{session_id}")
 def delete_travel_session(session_id: str) -> dict[str, Any]:
     store = get_session_store()
@@ -168,7 +218,35 @@ def travel_session_query(
             budget=request.budget,
             language=request.language,
             preferences=request.preferences,
+            rewrite_day=request.rewrite_day,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.") from None
     return TravelQueryResponse(**result)
+
+
+@app.post("/travel/sessions/{session_id}/query/stream")
+def travel_session_query_stream(
+    session_id: str, request: TravelQueryRequest
+) -> StreamingResponse:
+    store = get_session_store()
+    if not store.get_session(session_id):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+
+    def event_gen() -> Iterator[str]:
+        try:
+            for event_type, payload in stream_travel_in_session(
+                session_id,
+                request.question,
+                destination=request.destination,
+                days=request.days,
+                budget=request.budget,
+                language=request.language,
+                preferences=request.preferences,
+                rewrite_day=request.rewrite_day,
+            ):
+                yield _sse(event_type, payload)
+        except Exception as exc:
+            yield _sse("error", {"message": str(exc)})
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
