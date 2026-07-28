@@ -19,6 +19,13 @@ elif not os.getenv("GOOGLE_API_KEY"):
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 LLM_MODEL = "gemini-2.5-flash"
 
+# Real-time weather via Open-Meteo (무료, API 키 불필요). https://open-meteo.com
+# 위/경도만으로 조회하며, 네트워크 실패 시 날씨 없이 동작합니다.
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+# Open-Meteo는 최대 16일까지 일별 예보 제공
+WEATHER_FORECAST_MAX_DAYS = 16
+WEATHER_REQUEST_TIMEOUT_SEC = 6
+
 DATA_PATH = PROJECT_ROOT / "data" / "alex-notes"
 VECTORSTORE_PATH = PROJECT_ROOT / "data" / "faiss_index"
 

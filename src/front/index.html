@@ -347,6 +347,52 @@
         gap: 6px;
       }
 
+      .weather-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #eef5ff, #f4fbf6);
+        border: 1px solid var(--line);
+      }
+
+      .weather-chip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: #fff;
+        border: 1px solid var(--line);
+        font-size: 0.82rem;
+      }
+
+      .weather-chip .wx-icon {
+        font-size: 1.15rem;
+        line-height: 1;
+      }
+
+      .weather-chip .wx-day {
+        font-weight: 600;
+      }
+
+      .weather-chip .wx-temp {
+        color: var(--muted);
+      }
+
+      .weather-chip.rain {
+        border-color: #9bbcf0;
+        background: #f0f6ff;
+      }
+
+      .day-weather {
+        margin-left: 8px;
+        font-size: 0.8rem;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
       .itinerary-toggle {
         display: flex;
         align-items: center;
@@ -847,16 +893,73 @@
         chat.scrollTop = chat.scrollHeight;
       }
 
+      function weatherIcon(condition, rain) {
+        const c = condition || "";
+        if (c.includes("눈")) return "🌨️";
+        if (c.includes("소나기")) return "🌦️";
+        if (c.includes("비") || rain) return "🌧️";
+        if (c.includes("흐림")) return "☁️";
+        if (c.includes("구름")) return "⛅";
+        if (c.includes("맑")) return "☀️";
+        return "🌡️";
+      }
+
       function renderPlanCards(data) {
         const itinerary = data.itinerary || [];
         const cities = data.cities || [];
         const warnings = data.warnings || [];
         const sources = data.sources || [];
-        if (!itinerary.length && !cities.length && !warnings.length && !sources.length)
+        const realtime = data.realtime || {};
+        const weather = realtime.weather || [];
+        const weatherByDay = {};
+        for (const w of weather) weatherByDay[w.day] = w;
+        if (
+          !itinerary.length &&
+          !cities.length &&
+          !warnings.length &&
+          !sources.length &&
+          !weather.length
+        )
           return null;
 
         const wrap = document.createElement("div");
         wrap.className = "plan";
+
+        if (weather.length) {
+          const strip = document.createElement("div");
+          strip.className = "weather-strip";
+          for (const w of weather) {
+            const chip = document.createElement("div");
+            chip.className = "weather-chip" + (w.rain ? " rain" : "");
+            const icon = document.createElement("span");
+            icon.className = "wx-icon";
+            icon.textContent = weatherIcon(w.condition, w.rain);
+            const label = document.createElement("span");
+            const day = document.createElement("span");
+            day.className = "wx-day";
+            day.textContent = `Day${w.day}`;
+            const cond = document.createTextNode(` ${w.condition || ""}`);
+            label.appendChild(day);
+            label.appendChild(cond);
+            chip.appendChild(icon);
+            chip.appendChild(label);
+            if (w.temp_min != null && w.temp_max != null) {
+              const temp = document.createElement("span");
+              temp.className = "wx-temp";
+              temp.textContent = `${w.temp_min}~${w.temp_max}℃`;
+              chip.appendChild(temp);
+            }
+            if (w.pop != null) {
+              const pop = document.createElement("span");
+              pop.className = "wx-temp";
+              pop.textContent = `☔${w.pop}%`;
+              chip.appendChild(pop);
+            }
+            chip.title = w.date ? `${w.date} (${w.weekday})` : "";
+            strip.appendChild(chip);
+          }
+          wrap.appendChild(strip);
+        }
 
         if (cities.length) {
           const list = document.createElement("ol");
@@ -962,6 +1065,17 @@
             title.className = "day-title";
             title.textContent = `Day ${day.day}${day.theme ? ` · ${day.theme}` : ""}`;
             header.appendChild(title);
+            const wx = weatherByDay[day.day];
+            if (wx) {
+              const badge = document.createElement("span");
+              badge.className = "day-weather";
+              const temp =
+                wx.temp_min != null && wx.temp_max != null
+                  ? ` ${wx.temp_min}~${wx.temp_max}℃`
+                  : "";
+              badge.textContent = `${weatherIcon(wx.condition, wx.rain)} ${wx.condition || ""}${temp}`;
+              header.appendChild(badge);
+            }
             block.appendChild(header);
 
             const body = document.createElement("div");

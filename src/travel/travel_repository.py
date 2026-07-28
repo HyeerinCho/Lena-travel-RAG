@@ -280,8 +280,8 @@ class TravelRepository:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
             SELECT poi_id, travel_type, name_ko, name_en, region, city,
-                   address_ko, address_en, phone, hours_ko, hours_en, fee_ko, fee_en,
-                   menu_ko, source, page_content
+                   address_ko, address_en, phone, hours_ko, hours_en, closed_ko,
+                   fee_ko, fee_en, menu_ko, source, page_content
             FROM places
             {where}
             ORDER BY

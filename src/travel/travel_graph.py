@@ -16,6 +16,7 @@ from src.prompts import (
     TRAVEL_ITINERARY_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
 )
+from src.travel.travel_realtime import build_realtime_context
 from src.travel.travel_repository import city_match_values
 from src.travel.travel_tools import TravelSearchService
 
@@ -40,6 +41,7 @@ class TravelState(TypedDict, total=False):
     intent: str
     cities: list[dict[str, Any]]
     exclude_cities: list[str]
+    realtime: dict[str, Any]
 
 
 _ORDINAL_KO = {
@@ -385,6 +387,7 @@ def _compact_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[
         "region",
         "address_ko",
         "hours_ko",
+        "closed_ko",
         "fee_ko",
         "source",
     )
@@ -714,6 +717,12 @@ def build_travel_graph(search: TravelSearchService):
         language = state.get("language") or "ko"
         rewrite_day = state.get("rewrite_day")
         previous = list(state.get("previous_itinerary") or [])
+        realtime = build_realtime_context(
+            state.get("destination"),
+            state.get("places") or [],
+            state.get("days"),
+        )
+        realtime_text = realtime.get("text") or "(제공 가능한 실시간 정보 없음)"
 
         if not places and not courses:
             return _fallback_itinerary(state)
@@ -732,6 +741,7 @@ def build_travel_graph(search: TravelSearchService):
                         "previous_itinerary": json.dumps(previous, ensure_ascii=False),
                         "places": json.dumps(places, ensure_ascii=False),
                         "courses": json.dumps(courses, ensure_ascii=False),
+                        "realtime": realtime_text,
                     }
                 )
                 parsed = _extract_json(_llm_content(raw))
@@ -746,6 +756,7 @@ def build_travel_graph(search: TravelSearchService):
                         or f"{rewrite_day}일차를 바꾸지 못했습니다. 다른 표현으로 다시 요청해 주세요.",
                         "sources": _build_sources(state),
                         "rewrite_day": rewrite_day,
+                        "realtime": realtime,
                     }
                 itinerary = _merge_day_into_itinerary(previous, int(rewrite_day), new_day)
                 warnings.extend(parsed.get("warnings") or [])
@@ -756,6 +767,7 @@ def build_travel_graph(search: TravelSearchService):
                     "answer": answer,
                     "sources": _build_sources(state),
                     "rewrite_day": rewrite_day,
+                    "realtime": realtime,
                 }
 
             raw = (TRAVEL_ITINERARY_PROMPT | llm).invoke(
@@ -769,6 +781,7 @@ def build_travel_graph(search: TravelSearchService):
                     "language": language,
                     "places": json.dumps(places, ensure_ascii=False),
                     "courses": json.dumps(courses, ensure_ascii=False),
+                    "realtime": realtime_text,
                 }
             )
             parsed = _extract_json(_llm_content(raw))
@@ -785,6 +798,7 @@ def build_travel_graph(search: TravelSearchService):
             "warnings": warnings,
             "answer": parsed["answer"],
             "sources": _build_sources(state),
+            "realtime": realtime,
         }
 
     graph = StateGraph(TravelState)
@@ -966,6 +980,13 @@ def stream_build_itinerary_tokens(
     language = result_so_far.get("language") or "ko"
     rewrite_day = result_so_far.get("rewrite_day")
     previous = list(result_so_far.get("previous_itinerary") or [])
+    realtime = build_realtime_context(
+        result_so_far.get("destination"),
+        places,
+        result_so_far.get("days"),
+    )
+    realtime_text = realtime.get("text") or "(제공 가능한 실시간 정보 없음)"
+    result_so_far["realtime"] = realtime
 
     if not compact_places and not compact_courses:
         fallback = _fallback_itinerary(result_so_far)
@@ -986,6 +1007,7 @@ def stream_build_itinerary_tokens(
             "previous_itinerary": json.dumps(previous, ensure_ascii=False),
             "places": json.dumps(compact_places, ensure_ascii=False),
             "courses": json.dumps(compact_courses, ensure_ascii=False),
+            "realtime": realtime_text,
         }
     else:
         prompt = TRAVEL_ITINERARY_PROMPT
@@ -999,6 +1021,7 @@ def stream_build_itinerary_tokens(
             "language": language,
             "places": json.dumps(compact_places, ensure_ascii=False),
             "courses": json.dumps(compact_courses, ensure_ascii=False),
+            "realtime": realtime_text,
         }
 
     accumulated = ""
@@ -1074,4 +1097,5 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "sources": state.get("sources") or [],
         "answer": state.get("answer") or "",
         "rewrite_day": state.get("rewrite_day"),
+        "realtime": state.get("realtime") or {},
     }
