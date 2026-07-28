@@ -277,12 +277,21 @@
         overflow-x: hidden;
         overflow-y: auto;
         padding: 8px 2px 18px;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
+        scrollbar-color: rgba(26, 42, 36, 0.25) transparent;
       }
 
       .chat::-webkit-scrollbar {
-        display: none;
+        width: 8px;
+        background: transparent;
+      }
+
+      .chat::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .chat::-webkit-scrollbar-thumb {
+        background: rgba(26, 42, 36, 0.25);
+        border-radius: 8px;
       }
 
       .bubble {
