@@ -17,7 +17,7 @@ from src.travel.travel_agent import (
 
 FRONT_DIR = Path(__file__).resolve().parent / "front"
 
-app = FastAPI(title="LENA Travel + Notes RAG API")
+app = FastAPI(title="LENA Travel RAG API")
 
 
 class QueryRequest(BaseModel):
