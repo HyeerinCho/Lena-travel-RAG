@@ -15,7 +15,7 @@ from src.travel.travel_agent import (
     stream_travel_in_session,
 )
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+FRONT_DIR = Path(__file__).resolve().parent / "front"
 
 app = FastAPI(title="LENA Travel + Notes RAG API")
 
@@ -104,7 +104,7 @@ def _sse(event: str, data: Any) -> str:
 
 @app.get("/")
 def root():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(FRONT_DIR / "index.html")
 
 
 @app.get("/api")
