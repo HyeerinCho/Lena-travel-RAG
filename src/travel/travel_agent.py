@@ -84,6 +84,7 @@ def ask_travel(
         "warnings": result.get("warnings") or [],
         "sources": result.get("sources") or [],
         "rewrite_day": result.get("rewrite_day"),
+        "realtime": result.get("realtime") or {},
     }
 
 
@@ -103,6 +104,7 @@ def _persist_session_result(session_id: str, question: str, result: dict[str, An
             "intent": result.get("intent"),
             "warnings": result.get("warnings"),
             "sources": result.get("sources"),
+            "realtime": result.get("realtime"),
         },
     )
     updated = store.update_session_meta(

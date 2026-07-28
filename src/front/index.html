@@ -1248,7 +1248,8 @@
             payload.itinerary ||
             payload.cities ||
             payload.warnings ||
-            payload.sources
+            payload.sources ||
+            (payload.realtime && payload.realtime.weather)
           ) {
             fillAgentBubble(el, {
               answer: message.content,
