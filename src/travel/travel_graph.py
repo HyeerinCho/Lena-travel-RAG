@@ -174,27 +174,34 @@ def _detect_city_list_intent(query: str) -> bool:
     return any(re.search(p, query, re.I) for p in patterns)
 
 
-# 새 일정 작성을 원하는 신호. 이게 있으면 qa가 아니라 itinerary로 본다.
-_ITINERARY_HINTS = (
-    "일정", "코스", "플랜", "계획", "짜줘", "짜 줘", "짜주", "만들어", "추천",
-    "며칠", "박", "일차", "itinerary", "plan", "course",
+# 일정을 새로 만들거나 변경해달라는 "요청 동사" 신호. 단순히 "일정"이라는
+# 단어만 있는 것(예: "위 일정에서 ~ 가능해?")은 여기에 해당하지 않는다.
+_ITINERARY_REQUEST_HINTS = (
+    "짜줘", "짜 줘", "짜주", "짜볼", "짜 볼", "만들어", "만들어줘", "세워줘",
+    "세워 줘", "추천해", "추천좀", "추천 좀", "추천해줘", "다시 짜", "새로 짜",
+    "다시 만들", "새로 만들", "바꿔", "변경해", "변경하", "수정해", "수정하",
+    "추가해", "추가로 넣", "넣어줘", "빼줘", "빼 줘", "빼고 짜", "교체", "제외해",
+    "recommend", "plan a", "make me", "build",
 )
-# 가부/확인/일반 대화 신호.
+# 가부/확인/일반 대화 신호. (일정을 바꾸지 않고 답만 원하는 경우)
 _QA_HINTS = (
-    "가능해", "가능한가", "가능할까", "가능한지", "가능?", "되나", "되나요", "될까",
-    "돼?", "돼요", "되니", "할 수 있", "해도 돼", "해도 되", "괜찮을까", "괜찮나",
-    "괜찮아", "무리일까", "무리인가", "맞아?", "맞나요", "인가요", "일까?",
-    "가도 돼", "가도 되", "없이도", "고마워", "감사",
+    "가능해", "가능한가", "가능할까", "가능한지", "가능?", "가능한가요", "되나",
+    "되나요", "될까", "돼?", "돼요", "되니", "할 수 있", "해도 돼", "해도 되",
+    "괜찮을까", "괜찮나", "괜찮아", "무리일까", "무리인가", "무리 아닐까",
+    "맞아?", "맞나요", "인가요", "일까?", "가도 돼", "가도 되", "없이도",
+    "충분해", "충분할까", "충분한가", "포함돼", "포함되나", "들어가나",
+    "있나요", "있어?", "어려울까", "어렵나", "고마워", "감사",
 )
 
 
 def _detect_qa_intent(query: str) -> bool:
     """True when the user just asks a yes/no or informational question
-    that does not require building a new itinerary."""
+    about the current context (e.g. "위 일정에서 ~ 가능해?") and does NOT
+    ask to create or change an itinerary."""
     q = query or ""
     if _heuristic_rewrite_day(q) is not None:
         return False
-    if any(h in q for h in _ITINERARY_HINTS):
+    if any(h in q for h in _ITINERARY_REQUEST_HINTS):
         return False
     return any(h in q for h in _QA_HINTS)
 
