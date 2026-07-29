@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.rag import ask
+from src.tour_routes import router as tour_router
 from src.travel.travel_agent import (
     ask_travel,
     ask_travel_in_session,
@@ -18,6 +19,7 @@ from src.travel.travel_agent import (
 FRONT_DIR = Path(__file__).resolve().parent / "front"
 
 app = FastAPI(title="LENA Travel RAG API")
+app.include_router(tour_router)
 
 
 class QueryRequest(BaseModel):
@@ -120,6 +122,19 @@ def api_info():
             "/travel/sessions/{session_id}/query/stream",
             "/travel/places/{poi_id}",
         ],
+        "tourapi": {
+            "kor": ["/travel/kor/area-codes", "/travel/kor/category-codes",
+                    "/travel/kor/area", "/travel/kor/nearby", "/travel/kor/search",
+                    "/travel/kor/festivals", "/travel/kor/stays",
+                    "/travel/kor/detail/{content_id}"],
+            "pet": ["/travel/pet/search", "/travel/pet/area", "/travel/pet/nearby",
+                    "/travel/pet/{content_id}"],
+            "with": ["/travel/with/area", "/travel/with/nearby", "/travel/with/search",
+                     "/travel/with/detail/{content_id}"],
+            "durunubi": ["/travel/durunubi/courses", "/travel/durunubi/routes"],
+            "related": ["/travel/related/area", "/travel/related/search"],
+        },
+        "docs": "/docs",
     }
 
 

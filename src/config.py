@@ -26,6 +26,34 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 WEATHER_FORECAST_MAX_DAYS = 16
 WEATHER_REQUEST_TIMEOUT_SEC = 6
 
+# 한국관광공사 공공데이터(data.go.kr B551011) 통합 설정.
+# 아래 5개 서비스가 동일 계정 인증키를 공유합니다.
+#  - KorService2         : 국문 관광정보          https://www.data.go.kr/data/15101578/openapi.do
+#  - KorPetTourService2  : 반려동물 동반여행       https://www.data.go.kr/data/15135102/openapi.do
+#  - KorWithService2     : 무장애 여행            https://www.data.go.kr/data/15101897/openapi.do
+#  - Durunubi            : 두루누비(코리아둘레길)  https://www.data.go.kr/data/15101974/openapi.do
+#  - TarRlteTarService1  : 관광지별 연관 관광지    https://www.data.go.kr/data/15128560/openapi.do
+#
+# 인증키는 .env 의 DATA_GO_KR_API_KEY 로 주입하세요. 값이 없으면 "[APIkey]"
+# 플레이스홀더가 사용되며, 실제 호출 전에 반드시 채워야 합니다.
+# 주의: data.go.kr 의 "일반 인증키(Decoding)" 값을 사용하세요.
+# (urlencode 가 자동 인코딩하므로 Encoding 키를 쓰면 이중 인코딩됩니다.)
+DATA_GO_KR_API_KEY = (
+    os.getenv("DATA_GO_KR_API_KEY")
+    or os.getenv("KOR_PET_TOUR_API_KEY")  # 하위 호환
+    or "[APIkey]"
+)
+DATA_GO_KR_MOBILE_OS = os.getenv("DATA_GO_KR_MOBILE_OS", "ETC")
+DATA_GO_KR_MOBILE_APP = os.getenv("DATA_GO_KR_MOBILE_APP", "LENA")
+DATA_GO_KR_REQUEST_TIMEOUT_SEC = 8
+
+_TOURAPI_BASE = "https://apis.data.go.kr/B551011"
+KOR_SERVICE_BASE_URL = f"{_TOURAPI_BASE}/KorService2"
+KOR_PET_TOUR_BASE_URL = f"{_TOURAPI_BASE}/KorPetTourService2"
+KOR_WITH_SERVICE_BASE_URL = f"{_TOURAPI_BASE}/KorWithService2"
+DURUNUBI_BASE_URL = f"{_TOURAPI_BASE}/Durunubi"
+TAR_RLTE_TAR_BASE_URL = f"{_TOURAPI_BASE}/TarRlteTarService1"
+
 DATA_PATH = PROJECT_ROOT / "data" / "alex-notes"
 VECTORSTORE_PATH = PROJECT_ROOT / "data" / "faiss_index"
 
