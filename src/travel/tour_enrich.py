@@ -13,14 +13,19 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from src.travel.tour_api import (
     TourAPIError,
     durunubi,
     kor_pet_tour,
+    kor_service,
     kor_with_service,
 )
+
+# TourAPI 콘텐츠 타입: 레포츠(액티비티/체험)
+_LEPORTS_CONTENT_TYPE_ID = "28"
 
 # 대표 도시/권역명 -> TourAPI 지역코드(areaCode). 광역시도 기준.
 _AREA_CODE: dict[str, int] = {
@@ -120,6 +125,31 @@ def _trail_line(item: dict[str, Any]) -> str | None:
     return line
 
 
+def _festival_line(item: dict[str, Any]) -> str | None:
+    name = item.get("title")
+    if not name:
+        return None
+    parts = [str(name).strip()]
+    start = str(item.get("eventstartdate") or "").strip()
+    end = str(item.get("eventenddate") or "").strip()
+    if start:
+        period = _fmt_date(start)
+        if end and end != start:
+            period += f"~{_fmt_date(end)}"
+        parts.append(f"({period})")
+    addr = str(item.get("addr1") or "").strip()
+    if addr:
+        parts.append(addr)
+    return " ".join(parts)
+
+
+def _fmt_date(yyyymmdd: str) -> str:
+    digits = re.sub(r"[^\d]", "", yyyymmdd)
+    if len(digits) == 8:
+        return f"{digits[4:6]}.{digits[6:8]}"
+    return yyyymmdd
+
+
 def _item_matches(item: dict[str, Any], needle: str) -> bool:
     blob = " ".join(str(v) for v in item.values() if v is not None)
     return needle in blob
@@ -164,6 +194,35 @@ def _fetch_trails(destination: str | None, limit: int) -> list[dict[str, Any]]:
     return items[:limit]
 
 
+def _fetch_activities(area_code: int | None, limit: int) -> list[dict[str, Any]]:
+    if area_code is None:
+        return []
+    try:
+        res = kor_service.area_based_list(
+            area_code=str(area_code),
+            content_type_id=_LEPORTS_CONTENT_TYPE_ID,
+            num_of_rows=limit,
+        )
+        return (res.get("items") or [])[:limit]
+    except TourAPIError:
+        return []
+
+
+def _fetch_festivals(area_code: int | None, limit: int) -> list[dict[str, Any]]:
+    if area_code is None:
+        return []
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        res = kor_service.search_festival(
+            event_start_date=today,
+            area_code=str(area_code),
+            num_of_rows=limit,
+        )
+        return (res.get("items") or [])[:limit]
+    except TourAPIError:
+        return []
+
+
 def build_tour_context(
     query: str,
     destination: str | None,
@@ -171,12 +230,13 @@ def build_tour_context(
     language: str = "ko",
     limit: int = 5,
 ) -> dict[str, Any]:
-    """관광공사 API 보강 컨텍스트. 감지된 의도가 없거나 데이터가 없으면 {}."""
-    if not query:
-        return {}
-    kinds = detect_kinds(query)
-    if not kinds:
-        return {}
+    """관광공사 API 보강 컨텍스트.
+
+    액티비티(레포츠)·행사는 목적지 지역코드만 있으면 항상 함께 붙여
+    일정에 체험/축제를 최대한 녹일 수 있게 합니다. 반려동물/무장애/걷기길은
+    질문에서 의도가 감지될 때만 붙입니다. 붙일 게 없으면 {}.
+    """
+    kinds = detect_kinds(query) if query else []
 
     en = language == "en"
     area_code = resolve_area_code(destination)
@@ -184,6 +244,30 @@ def build_tour_context(
 
     data: dict[str, list[dict[str, Any]]] = {}
     sections: list[str] = []
+
+    # 액티비티(레포츠) — 목적지 지역코드가 있으면 항상 시도
+    activities = _fetch_activities(area_code, limit)
+    if activities:
+        data["activity"] = activities
+        header = (
+            f"[Activities · leisure sports{where} (KTO API)]"
+            if en
+            else f"[액티비티·레포츠·체험{where} · 관광공사 API]"
+        )
+        lines = [f"- {ln}" for it in activities if (ln := _place_line(it))]
+        sections.append(header + "\n" + "\n".join(lines))
+
+    # 행사·축제 — 오늘 이후 진행 중/예정 행사
+    festivals = _fetch_festivals(area_code, limit)
+    if festivals:
+        data["festival"] = festivals
+        header = (
+            f"[Festivals & events{where} (KTO API)]"
+            if en
+            else f"[축제·공연·행사{where} · 관광공사 API]"
+        )
+        lines = [f"- {ln}" for it in festivals if (ln := _festival_line(it))]
+        sections.append(header + "\n" + "\n".join(lines))
 
     if "pet" in kinds:
         items = _fetch_pet(destination, area_code, limit)
@@ -225,7 +309,7 @@ def build_tour_context(
         return {}
 
     return {
-        "kinds": [k for k in kinds if k in data],
+        "kinds": list(data.keys()),
         "data": data,
         "text": "\n".join(sections),
     }

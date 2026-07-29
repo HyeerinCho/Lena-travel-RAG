@@ -495,6 +495,81 @@ def _build_city_list(
     }
 
 
+_LODGING_TYPE = "숙박"
+_LODGING_NAME_RE = re.compile(
+    r"숙소|숙박|호텔|게스트\s*하우스|펜션|리조트|모텔|민박|호스텔|"
+    r"\bhotel\b|\bpension\b|\bresort\b|\bmotel\b|\bhostel\b|\bguesthouse\b",
+    re.I,
+)
+
+
+def _is_lodging(place: dict[str, Any]) -> bool:
+    """True when a POI is lodging (by type or name)."""
+    if place.get("travel_type") == _LODGING_TYPE:
+        return True
+    name = str(place.get("name_ko") or place.get("name_en") or place.get("place_name") or "")
+    return bool(_LODGING_NAME_RE.search(name))
+
+
+def _drop_lodging(places: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [p for p in places if not _is_lodging(p)]
+
+
+def _external_experience_places(external: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Turn TourAPI activity/festival items into place-like candidates for the LLM."""
+    if not external:
+        return []
+    out: list[dict[str, Any]] = []
+    kind_labels = (
+        ("activity", "액티비티·레포츠"),
+        ("festival", "축제·행사"),
+    )
+    for kind, label in kind_labels:
+        for item in external.get(kind) or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("title") or "").strip()
+            if not name:
+                continue
+            # poi_id는 로컬 DB에 없으므로 붙이지 않는다(클릭 상세 조회 실패 방지).
+            row: dict[str, Any] = {
+                "name_ko": name,
+                "travel_type": label,
+                "source": "관광공사 API",
+            }
+            addr = str(item.get("addr1") or "").strip()
+            if addr:
+                row["address_ko"] = addr
+            start = str(item.get("eventstartdate") or "").strip()
+            end = str(item.get("eventenddate") or "").strip()
+            if start:
+                period = start
+                if end and end != start:
+                    period = f"{start}~{end}"
+                row["hours_ko"] = f"행사기간 {period}"
+            out.append(row)
+    return out
+
+
+def _merge_experience_places(
+    places: list[dict[str, Any]],
+    external: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Prepend activity/festival candidates so multi-itineraries can include them."""
+    extras = _external_experience_places(external)
+    if not extras:
+        return places
+    seen: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for p in extras + list(places):
+        key = str(p.get("name_ko") or p.get("name_en") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(p)
+    return merged
+
+
 def _compact_places(places: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
     keys = (
         "poi_id",
@@ -657,7 +732,7 @@ def _sanitize_itineraries(
     days: int,
     cap: int,
 ) -> list[dict[str, Any]]:
-    """Normalize LLM itineraries: keep valid days/slots, cap the count."""
+    """Normalize LLM itineraries: keep valid days/slots, drop lodging, cap the count."""
     out: list[dict[str, Any]] = []
     for item in raw_list or []:
         if not isinstance(item, dict):
@@ -666,11 +741,19 @@ def _sanitize_itineraries(
         for d in item.get("days") or []:
             if not isinstance(d, dict):
                 continue
-            slots = [
-                s
-                for s in (d.get("slots") or [])
-                if isinstance(s, dict) and s.get("place_name")
-            ]
+            slots = []
+            for s in d.get("slots") or []:
+                if not isinstance(s, dict) or not s.get("place_name"):
+                    continue
+                # multi 일정 비교에서는 숙소를 슬롯에 넣지 않는다.
+                if _is_lodging(
+                    {
+                        "place_name": s.get("place_name"),
+                        "travel_type": s.get("note") or "",
+                    }
+                ):
+                    continue
+                slots.append(s)
             if not slots:
                 continue
             norm_days.append(
@@ -806,9 +889,8 @@ def _build_multi_itinerary(
         "itineraries": itineraries,
         # Keep `itinerary` populated (first option) for export/session compatibility.
         "itinerary": first_days,
-        "accommodations": _sanitize_accommodations(
-            parsed.get("accommodations"), state.get("stays")
-        ),
+        # 같은 지역의 서로 다른 장소를 비교하는 요청이므로 숙소는 추천하지 않는다.
+        "accommodations": [],
         "warnings": warnings,
         "answer": answer,
         "sources": _build_sources(state),
@@ -1006,6 +1088,8 @@ def build_travel_graph(search: TravelSearchService):
 
         places = _drop_excluded(places, exclude_cities)
         places, focused_destination = _focus_single_region(places, destination)
+        # 숙소는 stays로 따로 다루므로 장소 후보에서는 항상 제외한다.
+        places = _drop_lodging(places)
         if focused_destination and not destination:
             destination = focused_destination
 
@@ -1017,14 +1101,19 @@ def build_travel_graph(search: TravelSearchService):
             limit=8,
         )
 
-        # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
-        stays = search.search_places(
-            query=query,
-            city=destination,
-            types=["숙박"],
-            limit=8,
-        )
-        stays = _drop_excluded(stays, exclude_cities)
+        is_multi = state.get("intent") == "multi_itinerary"
+        # 같은 지역 다른 장소 비교(multi)에서는 숙소를 추천하지 않는다.
+        if is_multi:
+            stays: list[dict[str, Any]] = []
+        else:
+            # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
+            stays = search.search_places(
+                query=query,
+                city=destination,
+                types=["숙박"],
+                limit=8,
+            )
+            stays = _drop_excluded(stays, exclude_cities)
 
         warnings = []
         if not places:
@@ -1045,10 +1134,13 @@ def build_travel_graph(search: TravelSearchService):
             state.get("query") or "",
             destination,
             language=state.get("language") or "ko",
+            limit=8 if is_multi else 5,
         )
         if tour:
             result["external"] = tour.get("data") or {}
             result["external_text"] = tour.get("text") or ""
+            # 액티비티·행사를 후보 장소에 합쳐 일정에 최대한 녹이도록 한다.
+            result["places"] = _merge_experience_places(places, result["external"])
         return result
 
     def build_itinerary(state: TravelState) -> TravelState:
@@ -1139,7 +1231,6 @@ def build_travel_graph(search: TravelSearchService):
                             "place_count": len(state.get("places") or []),
                             "places": json.dumps(places, ensure_ascii=False),
                             "courses": json.dumps(courses, ensure_ascii=False),
-                            "accommodations": stays_json,
                             "realtime": realtime_text,
                         }
                     )
@@ -1419,6 +1510,8 @@ def stream_build_itinerary_tokens(
 
     places = _drop_excluded(places, exclude_cities)
     places, focused_destination = _focus_single_region(places, destination)
+    # 숙소는 stays로 따로 다루므로 장소 후보에서는 항상 제외한다.
+    places = _drop_lodging(places)
     if focused_destination:
         destination = focused_destination
         result_so_far["destination"] = focused_destination
@@ -1430,9 +1523,14 @@ def stream_build_itinerary_tokens(
         query=query,
         limit=8,
     )
-    # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
-    stays = search.search_places(query=query, city=destination, types=["숙박"], limit=8)
-    stays = _drop_excluded(stays, exclude_cities)
+    is_multi = result_so_far.get("intent") == "multi_itinerary"
+    # 같은 지역 다른 장소 비교(multi)에서는 숙소를 추천하지 않는다.
+    if is_multi:
+        stays: list[dict[str, Any]] = []
+    else:
+        # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
+        stays = search.search_places(query=query, city=destination, types=["숙박"], limit=8)
+        stays = _drop_excluded(stays, exclude_cities)
     warnings: list[str] = []
     if not places:
         warnings.append("조건에 맞는 POI가 충분하지 않습니다.")
@@ -1447,10 +1545,13 @@ def stream_build_itinerary_tokens(
         result_so_far.get("query") or "",
         destination,
         language=result_so_far.get("language") or "ko",
+        limit=8 if is_multi else 5,
     )
     if tour:
         result_so_far["external"] = tour.get("data") or {}
         result_so_far["external_text"] = tour.get("text") or ""
+        places = _merge_experience_places(places, result_so_far["external"])
+        result_so_far["places"] = places
 
     yield ("status", {"stage": "writing"})
 
@@ -1489,7 +1590,6 @@ def stream_build_itinerary_tokens(
                 "place_count": len(places),
                 "places": json.dumps(compact_places, ensure_ascii=False),
                 "courses": json.dumps(compact_courses, ensure_ascii=False),
-                "accommodations": stays_json,
                 "realtime": realtime_text,
             }
             accumulated = ""
