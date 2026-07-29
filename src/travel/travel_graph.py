@@ -15,6 +15,7 @@ from src.prompts import (
     TRAVEL_EXTRACT_PROMPT,
     TRAVEL_ITINERARY_PROMPT,
     TRAVEL_MULTI_ITINERARY_PROMPT,
+    TRAVEL_QA_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
 )
 
@@ -173,6 +174,46 @@ def _detect_city_list_intent(query: str) -> bool:
     return any(re.search(p, query, re.I) for p in patterns)
 
 
+# 새 일정 작성을 원하는 신호. 이게 있으면 qa가 아니라 itinerary로 본다.
+_ITINERARY_HINTS = (
+    "일정", "코스", "플랜", "계획", "짜줘", "짜 줘", "짜주", "만들어", "추천",
+    "며칠", "박", "일차", "itinerary", "plan", "course",
+)
+# 가부/확인/일반 대화 신호.
+_QA_HINTS = (
+    "가능해", "가능한가", "가능할까", "가능한지", "가능?", "되나", "되나요", "될까",
+    "돼?", "돼요", "되니", "할 수 있", "해도 돼", "해도 되", "괜찮을까", "괜찮나",
+    "괜찮아", "무리일까", "무리인가", "맞아?", "맞나요", "인가요", "일까?",
+    "가도 돼", "가도 되", "없이도", "고마워", "감사",
+)
+
+
+def _detect_qa_intent(query: str) -> bool:
+    """True when the user just asks a yes/no or informational question
+    that does not require building a new itinerary."""
+    q = query or ""
+    if _heuristic_rewrite_day(q) is not None:
+        return False
+    if any(h in q for h in _ITINERARY_HINTS):
+        return False
+    return any(h in q for h in _QA_HINTS)
+
+
+def _resolve_intent(base_intent: str | None, parsed_intent: str | None,
+                    count: int | None, rewrite_day: int | None) -> str:
+    """Combine heuristic/LLM intents with a fixed priority."""
+    intents = (base_intent, parsed_intent)
+    if "city_list" in intents:
+        return "city_list"
+    if count:
+        return "multi_itinerary"
+    if rewrite_day is not None:
+        return "itinerary"
+    if "qa" in intents:
+        return "qa"
+    return "itinerary"
+
+
 def _heuristic_extract(query: str) -> dict[str, Any]:
     language = "en" if re.search(r"[A-Za-z]", query) and not re.search(r"[가-힣]", query) else "ko"
     days = None
@@ -271,7 +312,13 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         "language": language,
         "place_types": place_types,
         "rewrite_day": _heuristic_rewrite_day(query),
-        "intent": "city_list" if _detect_city_list_intent(query) else "itinerary",
+        "intent": (
+            "city_list"
+            if _detect_city_list_intent(query)
+            else "qa"
+            if _detect_qa_intent(query)
+            else "itinerary"
+        ),
         "exclude_cities": exclude_cities,
         "itinerary_count": _heuristic_itinerary_count(query),
     }
@@ -824,13 +871,10 @@ def build_travel_graph(search: TravelSearchService):
         count = _first_valid_count(parsed.get("itinerary_count"), base.get("itinerary_count"))
         merged["itinerary_count"] = count
 
-        # city_list wins first; then a multi-itinerary request (N개 일정) beats a single plan.
-        if "city_list" in (base.get("intent"), parsed.get("intent")):
-            merged["intent"] = "city_list"
-        elif count:
-            merged["intent"] = "multi_itinerary"
-        else:
-            merged["intent"] = "itinerary"
+        # 우선순위: city_list > multi_itinerary > qa > itinerary
+        merged["intent"] = _resolve_intent(
+            base.get("intent"), parsed.get("intent"), count, merged.get("rewrite_day")
+        )
 
         excluded = list(base.get("exclude_cities") or [])
         for c in parsed.get("exclude_cities") or []:
@@ -932,6 +976,32 @@ def build_travel_graph(search: TravelSearchService):
         return result
 
     def build_itinerary(state: TravelState) -> TravelState:
+        if state.get("intent") == "qa":
+            prev = state.get("previous_itinerary") or []
+            try:
+                raw = (TRAVEL_QA_PROMPT | llm).invoke(
+                    {
+                        "question": state.get("query"),
+                        "history": state.get("history") or "(없음)",
+                        "language": state.get("language") or "ko",
+                        "previous_itinerary": (
+                            json.dumps(prev, ensure_ascii=False) if prev else "(없음)"
+                        ),
+                    }
+                )
+                answer = _llm_content(raw).strip()
+            except Exception:
+                answer = ""
+            return {
+                "answer": answer or "죄송해요, 답변을 만들지 못했어요. 다시 물어봐 주세요.",
+                "itinerary": [],
+                "itineraries": [],
+                "cities": [],
+                "warnings": [],
+                "sources": [],
+                "intent": "qa",
+            }
+
         if state.get("intent") == "city_list":
             grouped = state.get("cities") or []
             if not grouped:
@@ -1149,12 +1219,10 @@ def stream_build_itinerary_tokens(
         merged["rewrite_day"] = _heuristic_rewrite_day(result_so_far["query"])
     count = _first_valid_count(parsed.get("itinerary_count"), base.get("itinerary_count"))
     merged["itinerary_count"] = count
-    if "city_list" in (base.get("intent"), parsed.get("intent")):
-        merged["intent"] = "city_list"
-    elif count:
-        merged["intent"] = "multi_itinerary"
-    else:
-        merged["intent"] = "itinerary"
+    # 우선순위: city_list > multi_itinerary > qa > itinerary
+    merged["intent"] = _resolve_intent(
+        base.get("intent"), parsed.get("intent"), count, merged.get("rewrite_day")
+    )
     excluded = list(base.get("exclude_cities") or [])
     for c in parsed.get("exclude_cities") or []:
         if c and c not in excluded:
@@ -1171,6 +1239,42 @@ def stream_build_itinerary_tokens(
     if "previous_itinerary" in result_so_far:
         merged["previous_itinerary"] = result_so_far["previous_itinerary"]
     result_so_far.update(merged)
+
+    # 가부/일반 질문(qa): 장소 검색·일정 작성 없이 대화형 답변만 스트리밍.
+    if result_so_far.get("intent") == "qa":
+        yield ("status", {"stage": "answering"})
+        prev = result_so_far.get("previous_itinerary") or []
+        inputs = {
+            "question": result_so_far.get("query"),
+            "history": result_so_far.get("history") or "(없음)",
+            "language": result_so_far.get("language") or "ko",
+            "previous_itinerary": (
+                json.dumps(prev, ensure_ascii=False) if prev else "(없음)"
+            ),
+        }
+        accumulated = ""
+        try:
+            for chunk in (TRAVEL_QA_PROMPT | llm).stream(inputs):
+                piece = _llm_content(chunk)
+                if not piece:
+                    continue
+                accumulated += piece
+                yield ("token", {"text": piece})
+        except Exception:
+            pass
+        result_so_far.update(
+            {
+                "answer": accumulated.strip()
+                or "죄송해요, 답변을 만들지 못했어요. 다시 물어봐 주세요.",
+                "itinerary": [],
+                "itineraries": [],
+                "cities": [],
+                "warnings": [],
+                "sources": [],
+            }
+        )
+        yield ("done", _result_payload(result_so_far))
+        return
 
     yield ("status", {"stage": "searching"})
     prefs = " ".join(result_so_far.get("preferences") or [])

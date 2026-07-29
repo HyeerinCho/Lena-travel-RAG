@@ -21,7 +21,7 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "language": "ko"|"en",
   "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
   "rewrite_day": number|null,   // N일차만 재작성 요청이면 해당 일차, 아니면 null
-  "intent": "itinerary"|"city_list",  // 아래 규칙 참고, 기본값 "itinerary"
+  "intent": "itinerary"|"city_list"|"qa",  // 아래 규칙 참고, 기본값 "itinerary"
   "exclude_cities": string[],   // 사용자가 "빼고/말고/제외"라고 한 도시들 (예: ["서울","부산"])
   "itinerary_count": number|null // 서로 다른 일정을 여러 개 원할 때 그 개수, 아니면 null
 }}
@@ -36,6 +36,9 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - "아무곳이나", "어디든", "아무 데나 골라"처럼 목적지가 열려 있으면 한국 내 도시/권역 하나를 골라 destination에 넣으세요 (예: 부산, 제주, 강릉). 부산+제주처럼 멀리 떨어진 복수 목적지는 넣지 마세요
 - destination은 단일 도시 또는 인접 권역 하나만 (예: "경주", "부산", "제주")
 - intent: "OO하기 좋은 도시 리스트", "누구와 가기 좋은 도시만 뽑아줘"처럼 일정(코스)이 아니라 도시 목록을 원하면 "city_list". 그 외 일정/코스 요청은 "itinerary"
+- intent: 새 일정을 만들 필요 없이 가부/확인/일반 대화만 원하면 "qa". 예: "거기 겨울에도 갈 수 있어?", "예산 안에 가능할까?", "이 일정 무리일까?", "차 없이도 돼?", "고마워". 즉 사용자가 새 일정/코스/도시목록을 원하지 않고 질문에 대한 답만 원하면 "qa"입니다
+- 단, "일정 짜줄 수 있어?", "코스 추천 가능해?", "3일치 만들어줘"처럼 표현은 가부형이어도 실제로 새 일정 작성을 원하면 qa가 아니라 "itinerary"입니다
+- 특정 일차 재작성(rewrite_day가 있음)은 qa가 아니라 "itinerary"입니다
 - intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null로 두세요 (여러 도시를 비교해야 하므로)
 - "서울 말고", "부산 빼고", "제주 제외한 다른 곳"처럼 특정 도시를 빼달라고 하면 그 도시들을 exclude_cities에 넣고, 그 도시는 destination으로 넣지 마세요. "서울 말고 다른 도시"의 destination은 null입니다
 - exclude_cities에 넣은 도시는 절대 destination이나 추천에 포함하지 마세요
@@ -222,6 +225,30 @@ TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
 }}
 
 answer에는 사용자가 바로 읽을 수 있는 짧은 도시 리스트 요약을 넣으세요.
+""")
+
+TRAVEL_QA_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 상담 어시스턴트입니다.
+사용자의 질문에 이전 대화와 현재까지의 일정 맥락을 바탕으로 간결하고 친근하게 답하세요.
+
+규칙(필수):
+- 새로운 여행 일정을 새로 작성하지 마세요. 질문에 대한 답(가능 여부, 이유, 짧은 제안)만 하세요.
+- 가부 질문이면 먼저 "가능해요/어려워요"처럼 결론을 말하고, 한두 문장으로 이유나 팁을 덧붙이세요.
+- 근거가 없는 운영시간·요금·실시간 정보는 지어내지 마세요. 모르면 모른다고 솔직히 말하세요.
+- 일정을 실제로 바꿔야 하는 요청이면 "원하시면 일정을 새로 짜드릴까요?"처럼 되물으세요.
+- JSON을 출력하지 말고 자연스러운 문장으로만 답하세요. 필요하면 마크다운(굵게, 목록)을 써도 됩니다.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+현재까지의 일정(JSON, 없으면 "(없음)"):
+{previous_itinerary}
+
+사용자 질문: {question}
+
+답변:
 """)
 
 TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""

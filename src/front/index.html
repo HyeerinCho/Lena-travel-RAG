@@ -1236,11 +1236,12 @@
         writing: "일정을 작성하는 중…",
       };
 
-      const STEP_ORDER = ["extracting", "searching", "writing"];
+      // 백엔드가 보내는 status 단계 라벨. qa는 answering만, 일정은 searching/writing까지.
       const STEP_TITLE = {
         extracting: "요구사항 파악",
         searching: "장소 검색",
         writing: "일정 작성",
+        answering: "답변 작성",
       };
 
       function buildTypingStepper() {
@@ -1248,37 +1249,37 @@
         wrap.className = "typing-stepper";
         const steps = document.createElement("div");
         steps.className = "stepper-steps";
-        for (const stage of STEP_ORDER) {
-          const step = document.createElement("div");
+        wrap.appendChild(steps);
+        const dots = document.createElement("div");
+        dots.className = "typing-dots";
+        dots.innerHTML = "<span></span><span></span><span></span>";
+        wrap.appendChild(dots);
+        return wrap;
+      }
+
+      // 단계는 수신한 순서대로 동적으로 쌓인다. 새 stage가 오면 이전 단계는 done,
+      // 현재 단계는 active로 표시한다. (일정 vs 가부 질문에 따라 단계 구성이 달라짐)
+      function setStepperStage(stepper, stage) {
+        if (!stepper || !stage) return;
+        const stepsEl = stepper.querySelector(".stepper-steps");
+        if (!stepsEl) return;
+        let step = stepsEl.querySelector(`.step[data-stage="${stage}"]`);
+        if (!step) {
+          step = document.createElement("div");
           step.className = "step";
           step.dataset.stage = stage;
           const marker = document.createElement("span");
           marker.className = "step-marker";
           marker.textContent = "✓";
           const label = document.createElement("span");
-          label.textContent = STEP_TITLE[stage];
+          label.textContent = STEP_TITLE[stage] || "처리 중";
           step.appendChild(marker);
           step.appendChild(label);
-          steps.appendChild(step);
+          stepsEl.appendChild(step);
         }
-        const dots = document.createElement("div");
-        dots.className = "typing-dots";
-        dots.innerHTML = "<span></span><span></span><span></span>";
-        wrap.appendChild(steps);
-        wrap.appendChild(dots);
-        setStepperStage(wrap, STEP_ORDER[0]);
-        return wrap;
-      }
-
-      function setStepperStage(stepper, stage) {
-        if (!stepper) return;
-        const activeIdx = STEP_ORDER.indexOf(stage);
-        if (activeIdx === -1) return;
-        stepper.querySelectorAll(".step").forEach((el) => {
-          const idx = STEP_ORDER.indexOf(el.dataset.stage);
+        stepsEl.querySelectorAll(".step").forEach((el) => {
           el.classList.remove("active", "done");
-          if (idx < activeIdx) el.classList.add("done");
-          else if (idx === activeIdx) el.classList.add("active");
+          el.classList.add(el === step ? "active" : "done");
         });
       }
 
