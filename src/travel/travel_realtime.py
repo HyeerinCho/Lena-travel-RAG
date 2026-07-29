@@ -14,6 +14,7 @@ from typing import Any
 
 from src.config import (
     OPEN_METEO_URL,
+    WEATHER_DEFAULT_DAYS,
     WEATHER_FORECAST_MAX_DAYS,
     WEATHER_REQUEST_TIMEOUT_SEC,
 )
@@ -123,7 +124,8 @@ def fetch_weather(
     if coords is None:
         return []
 
-    horizon = min(days or WEATHER_FORECAST_MAX_DAYS, WEATHER_FORECAST_MAX_DAYS)
+    # 여행 기간이 지정되면 그 일수만큼, 지정되지 않으면 오늘부터 1주일(WEATHER_DEFAULT_DAYS)만.
+    horizon = min(days or WEATHER_DEFAULT_DAYS, WEATHER_FORECAST_MAX_DAYS)
     horizon = max(1, horizon)
     params = {
         "latitude": f"{coords[0]:.4f}",

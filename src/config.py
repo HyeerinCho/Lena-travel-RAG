@@ -24,6 +24,8 @@ LLM_MODEL = "gemini-2.5-flash"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # Open-Meteo는 최대 16일까지 일별 예보 제공
 WEATHER_FORECAST_MAX_DAYS = 16
+# 여행 기간이 지정되지 않았을 때 보여줄 기본 예보 일수(오늘부터 1주일)
+WEATHER_DEFAULT_DAYS = 7
 WEATHER_REQUEST_TIMEOUT_SEC = 6
 
 # 한국관광공사 공공데이터(data.go.kr B551011) 통합 설정.
