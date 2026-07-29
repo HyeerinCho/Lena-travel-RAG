@@ -38,6 +38,8 @@ class TravelState(TypedDict, total=False):
     place_types: list[str]
     places: list[dict[str, Any]]
     courses: list[dict[str, Any]]
+    stays: list[dict[str, Any]]
+    accommodations: list[dict[str, Any]]
     itinerary: list[dict[str, Any]]
     warnings: list[str]
     sources: list[dict[str, Any]]
@@ -190,7 +192,7 @@ _QA_HINTS = (
     "괜찮을까", "괜찮나", "괜찮아", "무리일까", "무리인가", "무리 아닐까",
     "맞아?", "맞나요", "인가요", "일까?", "가도 돼", "가도 되", "없이도",
     "충분해", "충분할까", "충분한가", "포함돼", "포함되나", "들어가나",
-    "있나요", "있어?", "어려울까", "어렵나", "고마워", "감사",
+    "있나요", "있어?", "어려울까", "어렵나", "고마워", "감사", "충분?",
 )
 
 
@@ -532,6 +534,60 @@ def _compact_courses(courses: list[dict[str, Any]], limit: int = 8) -> list[dict
     return out
 
 
+def _compact_stays(stays: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    keys = (
+        "poi_id",
+        "name_ko",
+        "name_en",
+        "travel_type",
+        "city",
+        "region",
+        "address_ko",
+    )
+    out = []
+    for s in stays[:limit]:
+        out.append({k: s.get(k) for k in keys if s.get(k) is not None})
+    return out
+
+
+def _sanitize_accommodations(
+    raw_list: Any,
+    stays: list[dict[str, Any]] | None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Keep only accommodations that match a real candidate (avoid hallucinated stays)."""
+    candidates = stays or []
+    valid_names = {
+        str(s.get("name_ko") or s.get("name_en") or "").strip()
+        for s in candidates
+        if (s.get("name_ko") or s.get("name_en"))
+    }
+    valid_ids = {str(s.get("poi_id")) for s in candidates if s.get("poi_id")}
+
+    out: list[dict[str, Any]] = []
+    for item in raw_list or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("place_name") or "").strip()
+        poi_id = item.get("poi_id")
+        if not name:
+            continue
+        # When we have candidate stays, only trust names/ids that came from them.
+        if valid_names and name not in valid_names and str(poi_id) not in valid_ids:
+            continue
+        out.append(
+            {
+                "place_name": name,
+                "poi_id": poi_id,
+                "area": item.get("area") or "",
+                "note": item.get("note") or "",
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _fallback_itinerary(state: TravelState) -> dict[str, Any]:
     days = state.get("days") or 1
     places = state.get("places") or []
@@ -750,6 +806,9 @@ def _build_multi_itinerary(
         "itineraries": itineraries,
         # Keep `itinerary` populated (first option) for export/session compatibility.
         "itinerary": first_days,
+        "accommodations": _sanitize_accommodations(
+            parsed.get("accommodations"), state.get("stays")
+        ),
         "warnings": warnings,
         "answer": answer,
         "sources": _build_sources(state),
@@ -958,6 +1017,15 @@ def build_travel_graph(search: TravelSearchService):
             limit=8,
         )
 
+        # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
+        stays = search.search_places(
+            query=query,
+            city=destination,
+            types=["숙박"],
+            limit=8,
+        )
+        stays = _drop_excluded(stays, exclude_cities)
+
         warnings = []
         if not places:
             warnings.append("조건에 맞는 POI가 충분하지 않습니다.")
@@ -967,6 +1035,7 @@ def build_travel_graph(search: TravelSearchService):
         result: TravelState = {
             "places": places,
             "courses": courses,
+            "stays": stays,
             "warnings": warnings,
         }
         if focused_destination:
@@ -1036,6 +1105,8 @@ def build_travel_graph(search: TravelSearchService):
 
         places = _compact_places(state.get("places") or [], limit=_place_limit_for(state))
         courses = _compact_courses(state.get("courses") or [])
+        stays = _compact_stays(state.get("stays") or [])
+        stays_json = json.dumps(stays, ensure_ascii=False)
         language = state.get("language") or "ko"
         rewrite_day = state.get("rewrite_day")
         previous = list(state.get("previous_itinerary") or [])
@@ -1068,6 +1139,7 @@ def build_travel_graph(search: TravelSearchService):
                             "place_count": len(state.get("places") or []),
                             "places": json.dumps(places, ensure_ascii=False),
                             "courses": json.dumps(courses, ensure_ascii=False),
+                            "accommodations": stays_json,
                             "realtime": realtime_text,
                         }
                     )
@@ -1133,6 +1205,7 @@ def build_travel_graph(search: TravelSearchService):
                     "language": language,
                     "places": json.dumps(places, ensure_ascii=False),
                     "courses": json.dumps(courses, ensure_ascii=False),
+                    "accommodations": stays_json,
                     "realtime": realtime_text,
                 }
             )
@@ -1147,6 +1220,9 @@ def build_travel_graph(search: TravelSearchService):
         warnings.extend(parsed.get("warnings") or [])
         return {
             "itinerary": parsed.get("itinerary") or [],
+            "accommodations": _sanitize_accommodations(
+                parsed.get("accommodations"), state.get("stays")
+            ),
             "warnings": warnings,
             "answer": parsed["answer"],
             "sources": _build_sources(state),
@@ -1354,6 +1430,9 @@ def stream_build_itinerary_tokens(
         query=query,
         limit=8,
     )
+    # 숙소는 일정 슬롯에 넣지 않고 따로 추천하기 위해 별도로 검색한다.
+    stays = search.search_places(query=query, city=destination, types=["숙박"], limit=8)
+    stays = _drop_excluded(stays, exclude_cities)
     warnings: list[str] = []
     if not places:
         warnings.append("조건에 맞는 POI가 충분하지 않습니다.")
@@ -1361,6 +1440,7 @@ def stream_build_itinerary_tokens(
         warnings.append("코스 가격은 과거 상품 참고값입니다.")
     result_so_far["places"] = places
     result_so_far["courses"] = courses
+    result_so_far["stays"] = stays
     result_so_far["warnings"] = warnings
 
     tour = build_tour_context(
@@ -1376,6 +1456,8 @@ def stream_build_itinerary_tokens(
 
     compact_places = _compact_places(places, limit=_place_limit_for(result_so_far))
     compact_courses = _compact_courses(courses)
+    compact_stays = _compact_stays(stays)
+    stays_json = json.dumps(compact_stays, ensure_ascii=False)
     language = result_so_far.get("language") or "ko"
     rewrite_day = result_so_far.get("rewrite_day")
     previous = list(result_so_far.get("previous_itinerary") or [])
@@ -1407,6 +1489,7 @@ def stream_build_itinerary_tokens(
                 "place_count": len(places),
                 "places": json.dumps(compact_places, ensure_ascii=False),
                 "courses": json.dumps(compact_courses, ensure_ascii=False),
+                "accommodations": stays_json,
                 "realtime": realtime_text,
             }
             accumulated = ""
@@ -1457,6 +1540,7 @@ def stream_build_itinerary_tokens(
             "language": language,
             "places": json.dumps(compact_places, ensure_ascii=False),
             "courses": json.dumps(compact_courses, ensure_ascii=False),
+            "accommodations": stays_json,
             "realtime": realtime_text,
         }
 
@@ -1508,6 +1592,9 @@ def stream_build_itinerary_tokens(
         result_so_far.update(
             {
                 "itinerary": parsed.get("itinerary") or [],
+                "accommodations": _sanitize_accommodations(
+                    parsed.get("accommodations"), stays
+                ),
                 "warnings": w,
                 "answer": parsed["answer"],
                 "sources": _build_sources(result_so_far),
@@ -1526,6 +1613,7 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "language": state.get("language") or "ko",
         "itinerary": state.get("itinerary") or [],
         "itineraries": state.get("itineraries") or [],
+        "accommodations": state.get("accommodations") or [],
         "itinerary_count": state.get("itinerary_count"),
         "cities": state.get("cities") or [],
         "intent": state.get("intent") or "itinerary",

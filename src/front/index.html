@@ -310,7 +310,7 @@
       }
 
       .bubble.agent {
-        align-self: flex-start;
+        align-self: center;
         background: var(--agent);
         border: 1px solid var(--line);
         box-shadow: var(--shadow);
@@ -873,6 +873,49 @@
       .city-place-empty {
         color: var(--muted);
         font-size: 0.85rem;
+      }
+
+      .stay-block {
+        margin-top: 10px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: rgba(116, 141, 166, 0.08);
+        border: 1px solid rgba(116, 141, 166, 0.18);
+      }
+
+      .stay-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+
+      .stay-list {
+        margin: 0;
+        padding-left: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .stay-item {
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+
+      .stay-name {
+        font-weight: 600;
+      }
+
+      .stay-name.clickable {
+        cursor: pointer;
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .stay-meta {
+        color: var(--muted);
       }
 
       .empty {
@@ -1519,6 +1562,7 @@
             answer: data.answer || "",
             itinerary: data.itinerary || [],
             itineraries: data.itineraries || [],
+            accommodations: data.accommodations || [],
             warnings: data.warnings || [],
             sources: data.sources || [],
             destination: data.destination,
@@ -1806,9 +1850,44 @@
         return section;
       }
 
+      function buildAccommodations(accommodations) {
+        const block = document.createElement("div");
+        block.className = "stay-block";
+        const label = document.createElement("div");
+        label.className = "stay-title";
+        label.textContent = "🏨 추천 숙소";
+        block.appendChild(label);
+        const list = document.createElement("ul");
+        list.className = "stay-list";
+        for (const a of accommodations) {
+          const li = document.createElement("li");
+          li.className = "stay-item";
+          const name = document.createElement("span");
+          name.className = "stay-name";
+          name.textContent = a.place_name || "숙소";
+          if (a.poi_id) {
+            name.classList.add("clickable");
+            name.title = "장소 상세 보기";
+            name.addEventListener("click", () => openPlace(a.poi_id));
+          }
+          li.appendChild(name);
+          const metaParts = [a.area, a.note].filter(Boolean);
+          if (metaParts.length) {
+            const meta = document.createElement("span");
+            meta.className = "stay-meta";
+            meta.textContent = ` — ${metaParts.join(" · ")}`;
+            li.appendChild(meta);
+          }
+          list.appendChild(li);
+        }
+        block.appendChild(list);
+        return block;
+      }
+
       function renderPlanCards(data) {
         const itinerary = data.itinerary || [];
         const itineraries = data.itineraries || [];
+        const accommodations = data.accommodations || [];
         const cities = data.cities || [];
         const warnings = data.warnings || [];
         const sources = data.sources || [];
@@ -1819,6 +1898,7 @@
         if (
           !itinerary.length &&
           !itineraries.length &&
+          !accommodations.length &&
           !cities.length &&
           !warnings.length &&
           !sources.length &&
@@ -1951,6 +2031,10 @@
           wrap.appendChild(itinBlock);
         }
 
+        if (accommodations.length) {
+          wrap.appendChild(buildAccommodations(accommodations));
+        }
+
         if (warnings.length) {
           const box = document.createElement("div");
           box.className = "warnings";
@@ -2045,6 +2129,14 @@
         } else {
           daysToMarkdown(lines, data.itinerary, 2);
         }
+        if ((data.accommodations || []).length) {
+          lines.push("## 추천 숙소");
+          for (const a of data.accommodations) {
+            const meta = [a.area, a.note].filter(Boolean).join(" · ");
+            lines.push(`- ${a.place_name || ""}${meta ? ` — ${meta}` : ""}`);
+          }
+          lines.push("");
+        }
         if ((data.warnings || []).length) {
           lines.push("## 주의");
           for (const w of data.warnings) lines.push(`- ${w}`);
@@ -2097,6 +2189,7 @@
           if (
             payload.itinerary ||
             payload.itineraries ||
+            payload.accommodations ||
             payload.cities ||
             payload.warnings ||
             payload.sources ||

@@ -78,6 +78,11 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 - 후보에 멀리 떨어진 도시가 섞여 있으면 목적지({destination})와 가까운 장소만 고르고, 먼 도시는 무시하세요.
 - 목적지가 비어 있어도 한 권역을 정해 그 안에서만 일정을 만드세요.
 
+숙소 규칙(필수):
+- 숙소(숙박/호텔/게스트하우스/펜션/리조트/모텔 등)는 일정(slots)에 절대 넣지 마세요. morning/afternoon/evening 슬롯에는 관광지·문화시설·음식점·체험 등만 배치하세요.
+- 대신 아래 '후보 숙소'를 참고해 여행 동선상 묵기 좋은 숙소를 따로 추천하고, accommodations 배열에 담으세요.
+- 후보 숙소가 비어 있으면 지어내지 말고 accommodations를 빈 배열([])로 두세요. accommodations의 place_name은 반드시 후보 숙소에 있는 이름 그대로만 쓰세요.
+
 응답 언어: {language}
 
 이전 대화:
@@ -96,6 +101,9 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 후보 코스(JSON):
 {courses}
 
+후보 숙소(JSON):
+{accommodations}
+
 실시간 참고 정보:
 {realtime}
 
@@ -110,6 +118,9 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
       ]
     }}
   ],
+  "accommodations": [
+    {{"place_name": string, "poi_id": string|null, "area": string, "note": string}}
+  ],
   "highlights": string[],
   "warnings": string[],
   "answer": string
@@ -121,11 +132,12 @@ answer 작성 형식(필수):
 - 각 문단은 "Day 1 · 테마" 같은 제목 줄로 시작하고, 그 아래 장소를 불릿(-)으로 한 줄씩 적으세요.
 - 같은 문단(하루) 안에서 줄바꿈은 \n 하나, 다른 날로 넘어갈 때는 \n\n 두 개를 쓰세요.
 - 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대(오전/오후/저녁)를 앞에 붙이세요.
+- 일정(day) 문단들 뒤에는 빈 줄(\n\n)을 두고 "숙소 추천" 제목 줄로 시작하는 문단을 따로 넣어, 추천 숙소를 "- 숙소명 — 지역/이유" 형식의 불릿(-)으로 적으세요. 숙소는 일정 안에 섞지 말고 이 문단에만 적으세요. 후보 숙소가 없으면 이 문단은 생략하세요.
 - 마지막에는 빈 줄(\n\n)을 하나 두고 "팁: ..." 한 줄을 덧붙이세요.
 - 후보가 부족하면 warnings에 명시하고 가능한 범위만 제안하세요.
 
 answer 예시(형식만 참고):
-"Day 1 · 도심 관광\n- 오전: OO공원 — 산책하기 좋음\n- 오후: OO박물관 — 실내 관람\n- 저녁: OO거리 — 야경\n\nDay 2 · 자연 여행\n- 오전: OO해변 — 바다 감상\n- 오후: OO전망대 — 사진 명소\n\n팁: 이동 동선을 고려해 오전엔 실내를 추천해요."
+"Day 1 · 도심 관광\n- 오전: OO공원 — 산책하기 좋음\n- 오후: OO박물관 — 실내 관람\n- 저녁: OO거리 — 야경\n\nDay 2 · 자연 여행\n- 오전: OO해변 — 바다 감상\n- 오후: OO전망대 — 사진 명소\n\n숙소 추천\n- OO호텔 — 도심 접근성이 좋아 이동이 편해요\n\n팁: 이동 동선을 고려해 오전엔 실내를 추천해요."
 """)
 
 TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
@@ -141,6 +153,9 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
 동선 규칙(필수):
 - 재작성하는 일차의 morning/afternoon/evening은 같은 도시(또는 바로 인접 생활권)만 사용하세요. 하루 안에 다른 도시로 이동하지 마세요.
 - 기존 일정·목적지({destination})와 지리적으로 가까운 권역을 유지하세요. 부산-제주처럼 먼 도시로 바꾸지 마세요.
+
+숙소 규칙(필수):
+- 숙소(숙박/호텔/게스트하우스/펜션/리조트/모텔 등)는 slots에 절대 넣지 마세요. 슬롯에는 관광지·문화시설·음식점·체험 등만 배치하세요.
 
 응답 언어: {language}
 
@@ -271,6 +286,11 @@ TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 - 같은 날(day)의 morning/afternoon/evening은 반드시 같은 도시(또는 인접 생활권) 안에서만 짜세요.
 - 목적지({destination})와 가까운 장소만 고르고, 먼 도시는 무시하세요.
 
+숙소 규칙(필수):
+- 숙소(숙박/호텔/게스트하우스/펜션/리조트/모텔 등)는 일정(slots)에 절대 넣지 마세요. 슬롯에는 관광지·문화시설·음식점·체험 등만 배치하세요.
+- 대신 아래 '후보 숙소'를 참고해 묵기 좋은 숙소를 따로 추천하고, 전체 공통 accommodations 배열에 담으세요.
+- 후보 숙소가 비어 있으면 지어내지 말고 accommodations를 빈 배열([])로 두세요. place_name은 반드시 후보 숙소에 있는 이름 그대로만 쓰세요.
+
 실시간 반영 규칙:
 - '실시간 참고 정보'가 있으면 반영하세요. 비 예보인 날은 실내 위주, '오늘 휴무 추정' 장소는 배치하지 마세요.
 - "(제공 가능한 실시간 정보 없음)"이면 무시하세요.
@@ -293,6 +313,9 @@ TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 후보 코스(JSON):
 {courses}
 
+후보 숙소(JSON):
+{accommodations}
+
 실시간 참고 정보:
 {realtime}
 
@@ -312,6 +335,9 @@ TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
       ]
     }}
   ],
+  "accommodations": [
+    {{"place_name": string, "poi_id": string|null, "area": string, "note": string}}
+  ],
   "warnings": string[],
   "answer": string
 }}
@@ -320,5 +346,6 @@ answer 작성 형식(필수):
 - 추천 일정마다 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\n\n)로 구분하세요.
 - 각 문단은 "추천 1 · 제목" 같은 제목 줄로 시작하고, 그 아래 방문지를 불릿(-)으로 한 줄씩(\n) 적으세요.
 - 각 불릿은 "- 오전: 장소명 — 짧은 설명"처럼 시간대(오전/오후/저녁)를 앞에 붙이세요.
+- 숙소는 일정 안에 섞지 말고, 모든 추천 일정 문단 뒤에 빈 줄(\n\n)을 두고 "숙소 추천" 제목 줄로 시작하는 문단을 하나만 따로 넣어 "- 숙소명 — 지역/이유" 형식의 불릿(-)으로 적으세요. 후보 숙소가 없으면 이 문단은 생략하세요.
 - 요청 개수보다 적게 만들었다면, 마지막 빈 줄(\n\n) 뒤에 그 이유를 한 줄로 정확히 설명하세요.
 """)
