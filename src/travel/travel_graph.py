@@ -458,12 +458,15 @@ def _fallback_itinerary(state: TravelState) -> dict[str, Any]:
         itinerary.append({"day": day, "theme": state.get("destination") or "Korea", "slots": slots})
 
     warnings.append("가격·운영시간은 데이터에 있는 값만 참고하세요. 실시간 정보는 별도 확인이 필요합니다.")
-    lines = []
+    blocks = []
     for day in itinerary:
-        lines.append(f"Day {day['day']}:")
+        theme = day.get("theme")
+        header = f"Day {day['day']} · {theme}" if theme else f"Day {day['day']}"
+        block_lines = [header]
         for slot in day["slots"]:
-            lines.append(f"- {slot['time']}: {slot['place_name']}")
-    answer = "\n".join(lines)
+            block_lines.append(f"- {slot['time']}: {slot['place_name']}")
+        blocks.append("\n".join(block_lines))
+    answer = "\n\n".join(blocks)
     sources = [
         {"type": "poi", "id": p.get("poi_id"), "name": p.get("name_ko")}
         for p in places[: idx or len(places)]

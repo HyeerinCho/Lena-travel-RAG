@@ -109,11 +109,17 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
   "answer": string
 }}
 
-answer에는 사용자가 바로 읽을 수 있는 일정 요약을 넣으세요.
-후보가 부족하면 warnings에 명시하고 가능한 범위만 제안하세요.
-Day1 / Day2 로 나누기
-장소는 불릿(-)으로
-마지막에 한 줄 팁 작성
+answer 작성 형식(필수):
+- answer는 사용자가 바로 읽을 수 있는 깔끔한 일정 요약이어야 합니다.
+- 일정(day)별로 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\n\n)로 구분하세요.
+- 각 문단은 "Day 1 · 테마" 같은 제목 줄로 시작하고, 그 아래 장소를 불릿(-)으로 한 줄씩 적으세요.
+- 같은 문단(하루) 안에서 줄바꿈은 \n 하나, 다른 날로 넘어갈 때는 \n\n 두 개를 쓰세요.
+- 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대(오전/오후/저녁)를 앞에 붙이세요.
+- 마지막에는 빈 줄(\n\n)을 하나 두고 "팁: ..." 한 줄을 덧붙이세요.
+- 후보가 부족하면 warnings에 명시하고 가능한 범위만 제안하세요.
+
+answer 예시(형식만 참고):
+"Day 1 · 도심 관광\n- 오전: OO공원 — 산책하기 좋음\n- 오후: OO박물관 — 실내 관람\n- 저녁: OO거리 — 야경\n\nDay 2 · 자연 여행\n- 오전: OO해변 — 바다 감상\n- 오후: OO전망대 — 사진 명소\n\n팁: 이동 동선을 고려해 오전엔 실내를 추천해요."
 """)
 
 TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
@@ -167,7 +173,11 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
   "answer": string
 }}
 
-answer에는 {rewrite_day}일차 변경 요약만 넣으세요.
+answer 작성 형식(필수):
+- answer에는 {rewrite_day}일차 변경 요약만 넣으세요.
+- "Day {rewrite_day} · 테마" 제목 줄로 시작하고, 그 아래 장소를 불릿(-)으로 한 줄씩(\n) 적으세요.
+- 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대를 앞에 붙이세요.
+- 마지막에는 빈 줄(\n\n)을 하나 두고 "팁: ..." 한 줄을 덧붙이세요.
 """)
 
 TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
