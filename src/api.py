@@ -50,6 +50,8 @@ class TravelQueryResponse(BaseModel):
     preferences: list[str] = []
     language: str = "ko"
     itinerary: list[dict[str, Any]] = []
+    itineraries: list[dict[str, Any]] = []
+    itinerary_count: int | None = None
     cities: list[dict[str, Any]] = []
     intent: str = "itinerary"
     places: list[dict[str, Any]] = []

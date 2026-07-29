@@ -22,7 +22,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
   "rewrite_day": number|null,   // N일차만 재작성 요청이면 해당 일차, 아니면 null
   "intent": "itinerary"|"city_list",  // 아래 규칙 참고, 기본값 "itinerary"
-  "exclude_cities": string[]    // 사용자가 "빼고/말고/제외"라고 한 도시들 (예: ["서울","부산"])
+  "exclude_cities": string[],   // 사용자가 "빼고/말고/제외"라고 한 도시들 (예: ["서울","부산"])
+  "itinerary_count": number|null // 서로 다른 일정을 여러 개 원할 때 그 개수, 아니면 null
 }}
 
 규칙:
@@ -38,6 +39,8 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null로 두세요 (여러 도시를 비교해야 하므로)
 - "서울 말고", "부산 빼고", "제주 제외한 다른 곳"처럼 특정 도시를 빼달라고 하면 그 도시들을 exclude_cities에 넣고, 그 도시는 destination으로 넣지 마세요. "서울 말고 다른 도시"의 destination은 null입니다
 - exclude_cities에 넣은 도시는 절대 destination이나 추천에 포함하지 마세요
+- "5개 일정 추천", "3군데 추천해줘", "당일치기 일정 5개", "코스 3가지"처럼 서로 다른 일정(코스)을 여러 개 원하면 그 개수를 itinerary_count에 넣으세요. 일정 개수 언급이 없으면 null입니다. "5개의 장소/맛집"처럼 한 일정 안의 방문지 개수를 뜻하면 itinerary_count가 아니라 null입니다
+- "당일치기", "당일 여행", "day trip"이면 days=1로 설정하세요
 
 이전 대화:
 {history}
@@ -219,4 +222,76 @@ TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
 }}
 
 answer에는 사용자가 바로 읽을 수 있는 짧은 도시 리스트 요약을 넣으세요.
+""")
+
+TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 일정 플래너입니다.
+사용자는 서로 다른 일정(코스)을 여러 개 비교하고 싶어 합니다.
+아래 후보 장소/코스, 이전 대화, '실시간 참고 정보'만 근거로 답하세요.
+후보 데이터에 없는 운영시간, 입장료, 메뉴, 실시간 가격을 지어내지 마세요.
+
+개수 규칙(매우 중요):
+- 사용자가 요청한 일정 개수: {requested_count}개
+- 이번에 만들 수 있는 최대 개수: {max_count}개 (이 수를 넘기지 마세요)
+- 후보 장소 수: {place_count}곳
+- 서로 다른(테마·장소가 겹치지 않는) 일정을 최대 {max_count}개까지 만드세요.
+- 후보 장소가 부족해 서로 다른 일정을 {max_count}개까지 못 만들면, 억지로 채우지 말고 만들 수 있는 개수만 만드세요.
+  이때 warnings와 answer에 "등록된 장소가 {place_count}곳뿐이라 서로 다른 일정을 N개까지만 만들 수 있었어요"처럼 정확한 이유를 적으세요.
+- 일정끼리 장소가 최대한 겹치지 않게 하세요. 어쩔 수 없이 겹치면 최소화하세요.
+
+동선 규칙(필수):
+- 각 일정은 지리적으로 가까운 도시/권역만 사용하세요. 장거리·항공 조합은 금지입니다.
+- 같은 날(day)의 morning/afternoon/evening은 반드시 같은 도시(또는 인접 생활권) 안에서만 짜세요.
+- 목적지({destination})와 가까운 장소만 고르고, 먼 도시는 무시하세요.
+
+실시간 반영 규칙:
+- '실시간 참고 정보'가 있으면 반영하세요. 비 예보인 날은 실내 위주, '오늘 휴무 추정' 장소는 배치하지 마세요.
+- "(제공 가능한 실시간 정보 없음)"이면 무시하세요.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+사용자 요구:
+- 질문: {question}
+- 목적지: {destination}
+- 일정당 일수: {days}
+- 예산: {budget}
+- 선호: {preferences}
+
+후보 장소(JSON):
+{places}
+
+후보 코스(JSON):
+{courses}
+
+실시간 참고 정보:
+{realtime}
+
+다음 JSON만 출력하세요:
+{{
+  "itineraries": [
+    {{
+      "title": string,   // 일정 특징 요약 (예: "바다 힐링 코스")
+      "days": [
+        {{
+          "day": 1,
+          "theme": string,
+          "slots": [
+            {{"time": "morning|afternoon|evening", "place_name": string, "poi_id": string|null, "note": string}}
+          ]
+        }}
+      ]
+    }}
+  ],
+  "warnings": string[],
+  "answer": string
+}}
+
+answer 작성 형식(필수):
+- 추천 일정마다 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\n\n)로 구분하세요.
+- 각 문단은 "추천 1 · 제목" 같은 제목 줄로 시작하고, 그 아래 방문지를 불릿(-)으로 한 줄씩(\n) 적으세요.
+- 각 불릿은 "- 오전: 장소명 — 짧은 설명"처럼 시간대(오전/오후/저녁)를 앞에 붙이세요.
+- 요청 개수보다 적게 만들었다면, 마지막 빈 줄(\n\n) 뒤에 그 이유를 한 줄로 정확히 설명하세요.
 """)

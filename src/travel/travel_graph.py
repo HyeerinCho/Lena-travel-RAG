@@ -14,8 +14,12 @@ from src.prompts import (
     TRAVEL_CITY_LIST_PROMPT,
     TRAVEL_EXTRACT_PROMPT,
     TRAVEL_ITINERARY_PROMPT,
+    TRAVEL_MULTI_ITINERARY_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
 )
+
+# 서로 다른 일정을 한 번에 몇 개까지 추천할지 상한. 이보다 많이 요청해도 잘라냅니다.
+MAX_ITINERARIES = 6
 from src.travel.tour_enrich import build_tour_context
 from src.travel.travel_realtime import build_realtime_context
 from src.travel.travel_repository import city_match_values
@@ -45,6 +49,8 @@ class TravelState(TypedDict, total=False):
     realtime: dict[str, Any]
     external: dict[str, Any]
     external_text: str
+    itinerary_count: int | None
+    itineraries: list[dict[str, Any]]
 
 
 _ORDINAL_KO = {
@@ -103,6 +109,55 @@ def _heuristic_rewrite_day(query: str) -> int | None:
     return None
 
 
+def _capped_count(count: int | None) -> int:
+    """Clamp a requested itinerary count to the [1, MAX_ITINERARIES] range."""
+    if not count or count < 1:
+        return 1
+    return min(count, MAX_ITINERARIES)
+
+
+def _place_limit_for(state: "TravelState") -> int:
+    """More candidate POIs when the user wants several distinct itineraries."""
+    if state.get("intent") != "multi_itinerary":
+        return 12
+    capped = _capped_count(state.get("itinerary_count"))
+    days = state.get("days") or 1
+    return max(18, min(60, capped * max(3, days) * 3))
+
+
+def _first_valid_count(*values: Any) -> int | None:
+    """Return the first value that is an int >= 2 (a real multi-itinerary request)."""
+    for value in values:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n >= 2:
+            return n
+    return None
+
+
+def _heuristic_itinerary_count(query: str) -> int | None:
+    """Detect how many distinct itineraries the user wants (e.g. "5개 일정 추천")."""
+    plan_word = r"(?:일정|코스|플랜|플렌|루트|여행|안|버전)"
+    patterns = [
+        rf"(\d+)\s*(?:개|가지|종류)\s*(?:의|짜리)?\s*{plan_word}",
+        rf"{plan_word}\s*(?:를|을)?\s*(\d+)\s*(?:개|가지|종류)",
+        r"(\d+)\s*군데",
+        rf"(\d+)\s*(?:different\s*)?(?:itinerar(?:y|ies)|plans?|courses?|routes?|options?)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, query, re.I)
+        if m:
+            try:
+                n = int(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if n >= 2:
+                return n
+    return None
+
+
 def _detect_city_list_intent(query: str) -> bool:
     """True when the user wants a list of cities, not a day-by-day itinerary."""
     if re.search(r"일정|코스|며칠|\d+\s*박|\d+\s*일차|day\s*\d", query, re.I):
@@ -121,17 +176,20 @@ def _detect_city_list_intent(query: str) -> bool:
 def _heuristic_extract(query: str) -> dict[str, Any]:
     language = "en" if re.search(r"[A-Za-z]", query) and not re.search(r"[가-힣]", query) else "ko"
     days = None
-    m = re.search(r"(\d+)\s*박\s*(\d+)\s*일", query)
-    if m:
-        days = int(m.group(2))
+    if re.search(r"당일치기|당일\s*여행|day\s*trip", query, re.I):
+        days = 1
     else:
-        m = re.search(r"(\d+)\s*일", query)
+        m = re.search(r"(\d+)\s*박\s*(\d+)\s*일", query)
         if m:
-            days = int(m.group(1))
+            days = int(m.group(2))
         else:
-            m = re.search(r"(\d+)\s*days?", query, re.I)
+            m = re.search(r"(\d+)\s*일", query)
             if m:
                 days = int(m.group(1))
+            else:
+                m = re.search(r"(\d+)\s*days?", query, re.I)
+                if m:
+                    days = int(m.group(1))
 
     budget = None
     m = re.search(r"(\d+)\s*만원", query)
@@ -215,6 +273,7 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         "rewrite_day": _heuristic_rewrite_day(query),
         "intent": "city_list" if _detect_city_list_intent(query) else "itinerary",
         "exclude_cities": exclude_cities,
+        "itinerary_count": _heuristic_itinerary_count(query),
     }
 
 
@@ -480,6 +539,172 @@ def _fallback_itinerary(state: TravelState) -> dict[str, Any]:
     }
 
 
+_SLOT_LABEL_KO = {"morning": "오전", "afternoon": "오후", "evening": "저녁"}
+
+
+def _sanitize_itineraries(
+    raw_list: Any,
+    days: int,
+    cap: int,
+) -> list[dict[str, Any]]:
+    """Normalize LLM itineraries: keep valid days/slots, cap the count."""
+    out: list[dict[str, Any]] = []
+    for item in raw_list or []:
+        if not isinstance(item, dict):
+            continue
+        norm_days: list[dict[str, Any]] = []
+        for d in item.get("days") or []:
+            if not isinstance(d, dict):
+                continue
+            slots = [
+                s
+                for s in (d.get("slots") or [])
+                if isinstance(s, dict) and s.get("place_name")
+            ]
+            if not slots:
+                continue
+            norm_days.append(
+                {
+                    "day": int(d.get("day") or (len(norm_days) + 1)),
+                    "theme": d.get("theme") or "",
+                    "slots": slots,
+                }
+            )
+        if not norm_days:
+            continue
+        out.append(
+            {
+                "title": item.get("title") or f"추천 {len(out) + 1}",
+                "days": norm_days,
+            }
+        )
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _chunk_places_into_itineraries(
+    places: list[dict[str, Any]],
+    days: int,
+    cap: int,
+) -> list[dict[str, Any]]:
+    """Code fallback: split candidate POIs into several distinct itineraries."""
+    slots_order = ("morning", "afternoon", "evening")
+    itineraries: list[dict[str, Any]] = []
+    idx = 0
+    for n in range(cap):
+        day_objs: list[dict[str, Any]] = []
+        for day in range(1, (days or 1) + 1):
+            slots = []
+            for slot in slots_order:
+                if idx >= len(places):
+                    break
+                p = places[idx]
+                idx += 1
+                slots.append(
+                    {
+                        "time": slot,
+                        "place_name": p.get("name_ko") or p.get("name_en") or "Unknown",
+                        "poi_id": p.get("poi_id"),
+                        "note": p.get("travel_type") or "",
+                    }
+                )
+            if slots:
+                day_objs.append({"day": day, "theme": "", "slots": slots})
+        if not day_objs:
+            break
+        itineraries.append({"title": f"코스 {n + 1}", "days": day_objs})
+    return itineraries
+
+
+def _multi_fallback_answer(itineraries: list[dict[str, Any]]) -> str:
+    """Readable, \\n\\n-separated summary when the model gave no answer text."""
+    if not itineraries:
+        return "조건에 맞는 일정을 만들지 못했습니다."
+    blocks: list[str] = []
+    for i, it in enumerate(itineraries, 1):
+        title = it.get("title") or f"추천 {i}"
+        lines = [f"추천 {i} · {title}"]
+        multi_day = len(it.get("days") or []) > 1
+        for day in it.get("days") or []:
+            if multi_day:
+                theme = day.get("theme") or ""
+                lines.append(f"[Day {day['day']}]{f' {theme}' if theme else ''}")
+            for slot in day.get("slots") or []:
+                label = _SLOT_LABEL_KO.get(slot.get("time"), slot.get("time") or "")
+                note = f" — {slot['note']}" if slot.get("note") else ""
+                lines.append(f"- {label}: {slot.get('place_name', '')}{note}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _multi_count_warnings(
+    requested: int,
+    cap: int,
+    actual: int,
+    place_count: int,
+    destination: str | None,
+) -> list[str]:
+    """Accurate, human-readable reasons when we couldn't honor the requested count."""
+    msgs: list[str] = []
+    region = destination or "해당 지역"
+    if actual < cap:
+        if place_count <= 0:
+            msgs.append(f"{region}에 등록된 장소가 없어서 일정을 만들지 못했어요.")
+        else:
+            msgs.append(
+                f"{region}에 등록된 장소가 {place_count}곳뿐이라 서로 다른 일정을 "
+                f"{actual}개까지만 만들 수 있었어요. (요청: {requested}개)"
+            )
+    elif requested > MAX_ITINERARIES:
+        msgs.append(
+            f"일정은 한 번에 최대 {MAX_ITINERARIES}개까지만 추천해요. "
+            f"요청하신 {requested}개는 너무 많아 {MAX_ITINERARIES}개로 정리했어요."
+        )
+    return msgs
+
+
+def _build_multi_itinerary(
+    state: TravelState,
+    parsed: dict[str, Any],
+    realtime: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble the multi-itinerary result, with fallbacks and accurate warnings."""
+    requested = int(state.get("itinerary_count") or 0)
+    cap = _capped_count(requested)
+    days = state.get("days") or 1
+
+    itineraries = _sanitize_itineraries(parsed.get("itineraries"), days, cap)
+    answer = parsed.get("answer")
+    if not itineraries:
+        # Model returned nothing usable → build distinct plans from the raw candidates.
+        itineraries = _chunk_places_into_itineraries(state.get("places") or [], days, cap)
+        answer = None
+
+    place_count = len(state.get("places") or [])
+    warnings = list(state.get("warnings") or [])
+    warnings.extend(parsed.get("warnings") or [])
+    for w in _multi_count_warnings(requested, cap, len(itineraries), place_count, state.get("destination")):
+        if w not in warnings:
+            warnings.append(w)
+
+    if not answer:
+        answer = _multi_fallback_answer(itineraries)
+
+    first_days = itineraries[0]["days"] if itineraries else []
+    return {
+        "itineraries": itineraries,
+        # Keep `itinerary` populated (first option) for export/session compatibility.
+        "itinerary": first_days,
+        "warnings": warnings,
+        "answer": answer,
+        "sources": _build_sources(state),
+        "intent": "multi_itinerary",
+        "itinerary_count": requested or None,
+        "realtime": realtime,
+    }
+
+
 def _merge_day_into_itinerary(
     previous: list[dict[str, Any]],
     day_num: int,
@@ -596,12 +821,16 @@ def build_travel_graph(search: TravelSearchService):
         elif merged.get("rewrite_day") is None:
             merged["rewrite_day"] = _heuristic_rewrite_day(state["query"])
 
-        # city_list wins if either the heuristic or the LLM detects it.
-        merged["intent"] = (
-            "city_list"
-            if "city_list" in (base.get("intent"), parsed.get("intent"))
-            else "itinerary"
-        )
+        count = _first_valid_count(parsed.get("itinerary_count"), base.get("itinerary_count"))
+        merged["itinerary_count"] = count
+
+        # city_list wins first; then a multi-itinerary request (N개 일정) beats a single plan.
+        if "city_list" in (base.get("intent"), parsed.get("intent")):
+            merged["intent"] = "city_list"
+        elif count:
+            merged["intent"] = "multi_itinerary"
+        else:
+            merged["intent"] = "itinerary"
 
         excluded = list(base.get("exclude_cities") or [])
         for c in parsed.get("exclude_cities") or []:
@@ -650,18 +879,19 @@ def build_travel_graph(search: TravelSearchService):
                 warnings.append("조건에 맞는 도시를 충분히 찾지 못했습니다.")
             return {"places": places, "courses": [], "warnings": warnings, "cities": cities}
 
+        place_limit = _place_limit_for(state)
         places = search.search_places(
             query=query,
             city=destination,
             types=types,
-            limit=12,
+            limit=place_limit,
         )
         if len(places) < 4 and destination:
             places = search.search_places(
                 query=query,
                 city=destination,
                 types=None,
-                limit=12,
+                limit=place_limit,
             )
 
         places = _drop_excluded(places, exclude_cities)
@@ -727,7 +957,7 @@ def build_travel_graph(search: TravelSearchService):
                 parsed = {}
             return _build_city_list(state, parsed)
 
-        places = _compact_places(state.get("places") or [])
+        places = _compact_places(state.get("places") or [], limit=_place_limit_for(state))
         courses = _compact_courses(state.get("courses") or [])
         language = state.get("language") or "ko"
         rewrite_day = state.get("rewrite_day")
@@ -741,6 +971,33 @@ def build_travel_graph(search: TravelSearchService):
         external_text = state.get("external_text") or ""
         if external_text:
             realtime_text = f"{realtime_text}\n{external_text}"
+
+        if state.get("intent") == "multi_itinerary":
+            cap = _capped_count(state.get("itinerary_count"))
+            parsed: dict[str, Any] = {}
+            if places:
+                try:
+                    raw = (TRAVEL_MULTI_ITINERARY_PROMPT | llm).invoke(
+                        {
+                            "question": state.get("query"),
+                            "history": state.get("history") or "(없음)",
+                            "destination": state.get("destination"),
+                            "days": state.get("days") or 1,
+                            "budget": state.get("budget"),
+                            "preferences": ", ".join(state.get("preferences") or []),
+                            "language": language,
+                            "requested_count": state.get("itinerary_count") or cap,
+                            "max_count": cap,
+                            "place_count": len(state.get("places") or []),
+                            "places": json.dumps(places, ensure_ascii=False),
+                            "courses": json.dumps(courses, ensure_ascii=False),
+                            "realtime": realtime_text,
+                        }
+                    )
+                    parsed = _extract_json(_llm_content(raw))
+                except Exception:
+                    parsed = {}
+            return _build_multi_itinerary(state, parsed, realtime)
 
         if not places and not courses:
             return _fallback_itinerary(state)
@@ -890,11 +1147,14 @@ def stream_build_itinerary_tokens(
         merged["rewrite_day"] = result_so_far["rewrite_day"]
     elif merged.get("rewrite_day") is None:
         merged["rewrite_day"] = _heuristic_rewrite_day(result_so_far["query"])
-    merged["intent"] = (
-        "city_list"
-        if "city_list" in (base.get("intent"), parsed.get("intent"))
-        else "itinerary"
-    )
+    count = _first_valid_count(parsed.get("itinerary_count"), base.get("itinerary_count"))
+    merged["itinerary_count"] = count
+    if "city_list" in (base.get("intent"), parsed.get("intent")):
+        merged["intent"] = "city_list"
+    elif count:
+        merged["intent"] = "multi_itinerary"
+    else:
+        merged["intent"] = "itinerary"
     excluded = list(base.get("exclude_cities") or [])
     for c in parsed.get("exclude_cities") or []:
         if c and c not in excluded:
@@ -965,9 +1225,10 @@ def stream_build_itinerary_tokens(
         yield ("done", _result_payload(result_so_far))
         return
 
-    places = search.search_places(query=query, city=destination, types=types, limit=12)
+    place_limit = _place_limit_for(result_so_far)
+    places = search.search_places(query=query, city=destination, types=types, limit=place_limit)
     if len(places) < 4 and destination:
-        places = search.search_places(query=query, city=destination, types=None, limit=12)
+        places = search.search_places(query=query, city=destination, types=None, limit=place_limit)
 
     places = _drop_excluded(places, exclude_cities)
     places, focused_destination = _focus_single_region(places, destination)
@@ -1002,7 +1263,7 @@ def stream_build_itinerary_tokens(
 
     yield ("status", {"stage": "writing"})
 
-    compact_places = _compact_places(places)
+    compact_places = _compact_places(places, limit=_place_limit_for(result_so_far))
     compact_courses = _compact_courses(courses)
     language = result_so_far.get("language") or "ko"
     rewrite_day = result_so_far.get("rewrite_day")
@@ -1017,6 +1278,40 @@ def stream_build_itinerary_tokens(
     if external_text:
         realtime_text = f"{realtime_text}\n{external_text}"
     result_so_far["realtime"] = realtime
+
+    if result_so_far.get("intent") == "multi_itinerary":
+        cap = _capped_count(result_so_far.get("itinerary_count"))
+        parsed = {}
+        if compact_places:
+            inputs = {
+                "question": result_so_far.get("query"),
+                "history": result_so_far.get("history") or "(없음)",
+                "destination": result_so_far.get("destination"),
+                "days": result_so_far.get("days") or 1,
+                "budget": result_so_far.get("budget"),
+                "preferences": ", ".join(result_so_far.get("preferences") or []),
+                "language": language,
+                "requested_count": result_so_far.get("itinerary_count") or cap,
+                "max_count": cap,
+                "place_count": len(places),
+                "places": json.dumps(compact_places, ensure_ascii=False),
+                "courses": json.dumps(compact_courses, ensure_ascii=False),
+                "realtime": realtime_text,
+            }
+            accumulated = ""
+            try:
+                for chunk in (TRAVEL_MULTI_ITINERARY_PROMPT | llm).stream(inputs):
+                    piece = _llm_content(chunk)
+                    if not piece:
+                        continue
+                    accumulated += piece
+                    yield ("token", {"text": piece})
+                parsed = _extract_json(accumulated)
+            except Exception:
+                parsed = {}
+        result_so_far.update(_build_multi_itinerary(result_so_far, parsed, realtime))
+        yield ("done", _result_payload(result_so_far))
+        return
 
     if not compact_places and not compact_courses:
         fallback = _fallback_itinerary(result_so_far)
@@ -1119,6 +1414,8 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "preferences": state.get("preferences") or [],
         "language": state.get("language") or "ko",
         "itinerary": state.get("itinerary") or [],
+        "itineraries": state.get("itineraries") or [],
+        "itinerary_count": state.get("itinerary_count"),
         "cities": state.get("cities") or [],
         "intent": state.get("intent") or "itinerary",
         "places": state.get("places") or [],
