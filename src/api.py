@@ -59,6 +59,7 @@ class TravelQueryResponse(BaseModel):
     session_id: str | None = None
     session: dict[str, Any] | None = None
     rewrite_day: int | None = None
+    external: dict[str, Any] = {}
 
 
 class CreateSessionRequest(BaseModel):

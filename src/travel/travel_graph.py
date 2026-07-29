@@ -16,6 +16,7 @@ from src.prompts import (
     TRAVEL_ITINERARY_PROMPT,
     TRAVEL_REWRITE_DAY_PROMPT,
 )
+from src.travel.tour_enrich import build_tour_context
 from src.travel.travel_realtime import build_realtime_context
 from src.travel.travel_repository import city_match_values
 from src.travel.travel_tools import TravelSearchService
@@ -42,6 +43,8 @@ class TravelState(TypedDict, total=False):
     cities: list[dict[str, Any]]
     exclude_cities: list[str]
     realtime: dict[str, Any]
+    external: dict[str, Any]
+    external_text: str
 
 
 _ORDINAL_KO = {
@@ -684,6 +687,15 @@ def build_travel_graph(search: TravelSearchService):
         }
         if focused_destination:
             result["destination"] = focused_destination
+
+        tour = build_tour_context(
+            state.get("query") or "",
+            destination,
+            language=state.get("language") or "ko",
+        )
+        if tour:
+            result["external"] = tour.get("data") or {}
+            result["external_text"] = tour.get("text") or ""
         return result
 
     def build_itinerary(state: TravelState) -> TravelState:
@@ -723,6 +735,9 @@ def build_travel_graph(search: TravelSearchService):
             state.get("days"),
         )
         realtime_text = realtime.get("text") or "(제공 가능한 실시간 정보 없음)"
+        external_text = state.get("external_text") or ""
+        if external_text:
+            realtime_text = f"{realtime_text}\n{external_text}"
 
         if not places and not courses:
             return _fallback_itinerary(state)
@@ -973,6 +988,15 @@ def stream_build_itinerary_tokens(
     result_so_far["courses"] = courses
     result_so_far["warnings"] = warnings
 
+    tour = build_tour_context(
+        result_so_far.get("query") or "",
+        destination,
+        language=result_so_far.get("language") or "ko",
+    )
+    if tour:
+        result_so_far["external"] = tour.get("data") or {}
+        result_so_far["external_text"] = tour.get("text") or ""
+
     yield ("status", {"stage": "writing"})
 
     compact_places = _compact_places(places)
@@ -986,6 +1010,9 @@ def stream_build_itinerary_tokens(
         result_so_far.get("days"),
     )
     realtime_text = realtime.get("text") or "(제공 가능한 실시간 정보 없음)"
+    external_text = result_so_far.get("external_text") or ""
+    if external_text:
+        realtime_text = f"{realtime_text}\n{external_text}"
     result_so_far["realtime"] = realtime
 
     if not compact_places and not compact_courses:
@@ -1098,4 +1125,5 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "answer": state.get("answer") or "",
         "rewrite_day": state.get("rewrite_day"),
         "realtime": state.get("realtime") or {},
+        "external": state.get("external") or {},
     }
