@@ -12,8 +12,8 @@
     />
     <style>
       :root {
-        --bg: #f2d7d9;
-        --bg-deep: #d3cedf;
+        --bg: #eef1f6;
+        --bg-deep: #dce2ec;
         --ink: #3a4a5c;
         --muted: #748da6;
         --user: #748da6;
@@ -42,10 +42,7 @@
       body {
         font-family: "IBM Plex Sans KR", sans-serif;
         color: var(--ink);
-        background:
-          radial-gradient(1200px 600px at 10% -10%, #f7e3e5 0%, transparent 55%),
-          radial-gradient(900px 500px at 100% 0%, #9cb4cc 0%, transparent 50%),
-          linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 60%, #9cb4cc 100%);
+        background: linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
       }
 
       .shell {
@@ -354,7 +351,7 @@
         gap: 8px;
         padding: 10px;
         border-radius: 12px;
-        background: linear-gradient(135deg, #e4e0ef, #f2d7d9);
+        background: rgba(255, 255, 255, 0.6);
         border: 1px solid var(--line);
       }
 
@@ -441,6 +438,44 @@
 
       .day-header {
         padding: 4px 0;
+      }
+
+      .day-mood {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 8px 0 10px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        color: #fff;
+        box-shadow: var(--shadow);
+        animation: rise 0.35s ease both;
+      }
+
+      .day-mood .mood-emoji {
+        font-size: 1.7rem;
+        line-height: 1;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+      }
+
+      .day-mood .mood-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .day-mood .mood-label {
+        font-weight: 600;
+        font-size: 0.9rem;
+      }
+
+      .day-mood .mood-sub {
+        font-size: 0.75rem;
+        opacity: 0.92;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .day-title {
@@ -598,8 +633,8 @@
         border-top: 1px solid var(--line);
         background: linear-gradient(
           180deg,
-          rgba(211, 206, 223, 0) 0%,
-          rgba(211, 206, 223, 0.85) 35%
+          rgba(220, 226, 236, 0) 0%,
+          rgba(220, 226, 236, 0.85) 35%
         );
         animation: rise 0.5s ease 0.15s both;
       }
@@ -910,6 +945,110 @@
         return "🌡️";
       }
 
+      const MOOD_RULES = [
+        {
+          keys: ["바다", "해변", "해안", "해수욕", "섬", "포구", "등대", "항구", "일몰", "선셋"],
+          emoji: "🌊",
+          label: "바다·해안 감성",
+          grad: "linear-gradient(135deg, #5b8fb9, #748da6)",
+        },
+        {
+          keys: ["산", "숲", "森", "공원", "트레킹", "등산", "계곡", "폭포", "수목원", "자연", "오름", "둘레길", "정원"],
+          emoji: "🌲",
+          label: "자연·힐링",
+          grad: "linear-gradient(135deg, #6f9c7d, #567d63)",
+        },
+        {
+          keys: ["맛집", "음식", "미식", "카페", "디저트", "먹거리", "레스토랑", "베이커리", "brunch", "브런치", "맛"],
+          emoji: "🍽️",
+          label: "미식 탐방",
+          grad: "linear-gradient(135deg, #e0a487, #c97b5a)",
+        },
+        {
+          keys: ["역사", "문화", "유적", "박물관", "미술관", "전통", "사찰", "고궁", "왕릉", "서원", "한옥", "유네스코"],
+          emoji: "🏛️",
+          label: "역사·문화",
+          grad: "linear-gradient(135deg, #a58ea8, #7d6580)",
+        },
+        {
+          keys: ["야경", "밤", "나이트", "포차", "펍", "바", "루프탑", "불꽃"],
+          emoji: "🌙",
+          label: "야경·나이트",
+          grad: "linear-gradient(135deg, #3f4a6b, #2b3350)",
+        },
+        {
+          keys: ["쇼핑", "시장", "거리", "상가", "면세", "아울렛", "핫플", "번화가"],
+          emoji: "🛍️",
+          label: "쇼핑·거리",
+          grad: "linear-gradient(135deg, #d98fae, #b46e8c)",
+        },
+        {
+          keys: ["온천", "스파", "휴양", "리조트", "힐링", "찜질", "웰니스", "여유"],
+          emoji: "♨️",
+          label: "휴식·힐링",
+          grad: "linear-gradient(135deg, #e0a487, #b98aa0)",
+        },
+        {
+          keys: ["액티비티", "체험", "레포츠", "테마파크", "놀이공원", "서핑", "카약", "패러글", "짚라인", "축제", "공연"],
+          emoji: "🎡",
+          label: "액티비티·체험",
+          grad: "linear-gradient(135deg, #4fa3a0, #3d8380)",
+        },
+        {
+          keys: ["도심", "시티", "빌딩", "타워", "전망대", "도시"],
+          emoji: "🏙️",
+          label: "시티 투어",
+          grad: "linear-gradient(135deg, #8593ad, #66748f)",
+        },
+      ];
+
+      function moodForDay(day) {
+        const text = [
+          day.theme || "",
+          ...(day.slots || []).map((s) => `${s.place_name || ""} ${s.note || ""}`),
+        ]
+          .join(" ")
+          .toLowerCase();
+        for (const rule of MOOD_RULES) {
+          if (rule.keys.some((k) => text.includes(k.toLowerCase()))) return rule;
+        }
+        return {
+          emoji: "✨",
+          label: "여행 감성",
+          grad: "linear-gradient(135deg, #9cb4cc, #748da6)",
+        };
+      }
+
+      function buildMoodBanner(day) {
+        const mood = moodForDay(day);
+        const banner = document.createElement("div");
+        banner.className = "day-mood";
+        banner.style.background = "linear-gradient(135deg, #9cb4cc, #748da6)";
+
+        const emoji = document.createElement("span");
+        emoji.className = "mood-emoji";
+        emoji.textContent = mood.emoji;
+        emoji.setAttribute("aria-hidden", "true");
+
+        const textWrap = document.createElement("div");
+        textWrap.className = "mood-text";
+        const label = document.createElement("span");
+        label.className = "mood-label";
+        label.textContent = mood.label;
+        textWrap.appendChild(label);
+        const subText = day.theme && day.theme !== mood.label ? day.theme : "";
+        if (subText) {
+          const sub = document.createElement("span");
+          sub.className = "mood-sub";
+          sub.textContent = subText;
+          textWrap.appendChild(sub);
+        }
+
+        banner.appendChild(emoji);
+        banner.appendChild(textWrap);
+        return banner;
+      }
+
       function buildDayBlock(day, weatherByDay, withRewrite) {
         const block = document.createElement("div");
         block.className = "day-block";
@@ -932,6 +1071,7 @@
           header.appendChild(badge);
         }
         block.appendChild(header);
+        block.appendChild(buildMoodBanner(day));
 
         const body = document.createElement("div");
         body.className = "day-body";
