@@ -891,8 +891,8 @@
 
       .stay-list {
         margin: 0;
-        padding-left: 0;
-        list-style: none;
+        padding-left: 1.4em;
+        list-style: decimal;
         display: flex;
         flex-direction: column;
         gap: 4px;
@@ -901,6 +901,7 @@
       .stay-item {
         font-size: 0.85rem;
         line-height: 1.4;
+        padding-left: 0.15em;
       }
 
       .stay-name {
@@ -1857,7 +1858,7 @@
         label.className = "stay-title";
         label.textContent = "🏨 추천 숙소";
         block.appendChild(label);
-        const list = document.createElement("ul");
+        const list = document.createElement("ol");
         list.className = "stay-list";
         for (const a of accommodations) {
           const li = document.createElement("li");
@@ -2131,10 +2132,10 @@
         }
         if ((data.accommodations || []).length) {
           lines.push("## 추천 숙소");
-          for (const a of data.accommodations) {
+          data.accommodations.forEach((a, i) => {
             const meta = [a.area, a.note].filter(Boolean).join(" · ");
-            lines.push(`- ${a.place_name || ""}${meta ? ` — ${meta}` : ""}`);
-          }
+            lines.push(`${i + 1}. ${a.place_name || ""}${meta ? ` — ${meta}` : ""}`);
+          });
           lines.push("");
         }
         if ((data.warnings || []).length) {
