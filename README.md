@@ -1,8 +1,8 @@
-# LENA-PJ — 과제 회고
+# LENA-PJ_여행 플래너 RAG
 
 LangChain + LangGraph 기반 **여행 플래너 RAG 챗봇**을 직접 구축하며 정리한 과제 회고 문서입니다.
 
-## 1. 과제 목표
+## 1. 목표
 
 - LangChain + LangGraph 기반 **RAG 파이프라인 구축** — 한국 여행 POI·코스 검색 및 일정 추천
 - **하이브리드 검색**(SQLite 정형 필터 + FAISS 시맨틱)으로 후보 확보
