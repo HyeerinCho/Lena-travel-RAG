@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lena-pj"
 version = "0.1.0"
-description = "LangGraph-based RAG chatbot over personal markdown notes"
+description = "LangGraph-based travel planner RAG chatbot for Korea"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -27,7 +27,6 @@ dependencies = [
 
 [tool.setuptools]
 script-files = [
-    "scripts/CLI/lena",
     "scripts/CLI/lena-api",
     "scripts/CLI/lena-travel",
     "scripts/build_travel_index.py",

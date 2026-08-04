@@ -56,9 +56,6 @@ KOR_WITH_SERVICE_BASE_URL = f"{_TOURAPI_BASE}/KorWithService2"
 DURUNUBI_BASE_URL = f"{_TOURAPI_BASE}/Durunubi"
 TAR_RLTE_TAR_BASE_URL = f"{_TOURAPI_BASE}/TarRlteTarService1"
 
-DATA_PATH = PROJECT_ROOT / "data" / "alex-notes"
-VECTORSTORE_PATH = PROJECT_ROOT / "data" / "faiss_index"
-
 # Travel data (NFC names; resolve_data_dir handles macOS NFD paths)
 POI_DATA_DIRNAME = "221.관광지 소개 다국어 번역 데이터"
 TRAVEL_INFO_DIRNAME = "여행 정보 데이터셋"
@@ -70,9 +67,6 @@ TRAVEL_VECTORSTORE_PATH = TRAVEL_DIR / "faiss_index"
 # Gemini free tier: embed_content 100 requests/min
 EMBED_BATCH_SIZE = 80
 EMBED_BATCH_DELAY_SEC = 65
-
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
 
 # MVP indexing defaults
 TRAVEL_POI_FULL_TYPES = ("관광지", "문화시설")

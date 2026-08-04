@@ -68,12 +68,9 @@ uv run python scripts/build_travel_index.py --skip-faiss
 uv run python scripts/build_travel_index.py --faiss-only --force-faiss
 ```
 
-> Notes 에이전트를 쓰려면 `data/alex-notes/`에 마크다운(`.md`) 파일을 넣어 두어야 합니다.
-
 ### 5. 실행
 
 ```bash
-uv run python scripts/CLI/lena          # 노트 RAG CLI
 uv run python scripts/CLI/lena-travel   # 여행 에이전트 CLI
 uv run python scripts/CLI/lena-api      # 웹/API 서버 → http://localhost:8000
 ```
@@ -85,7 +82,6 @@ uv run python scripts/CLI/lena-api      # 웹/API 서버 → http://localhost:80
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | `GET` | `/` | 여행 챗 웹 UI |
-| `POST` | `/query` | 노트 RAG Q&A |
 | `POST` | `/travel/query` | 여행 에이전트 (무상태) |
 | `POST` | `/travel/sessions/{id}/query` | 세션 기반 여행 질의 |
 | `POST` | `/travel/sessions/{id}/query/stream` | SSE 토큰 스트리밍 |
@@ -94,14 +90,6 @@ uv run python scripts/CLI/lena-api      # 웹/API 서버 → http://localhost:80
 | `/travel/kor/*` · `/pet/*` · `/with/*` · `/durunubi/*` · `/related/*` | TourAPI 원본 직통 노출 |
 
 ### 예시
-
-노트 Q&A:
-
-```bash
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "RAG가 뭐야?"}'
-```
 
 여행 Q&A (`question`만 필수):
 
@@ -124,22 +112,17 @@ LENA-PJ/
 │   └── assets/                 # 다이어그램 이미지
 ├── eval/dataset.py             # LangSmith 평가 데이터셋 시딩
 ├── scripts/
-│   ├── CLI/{lena,lena-travel,lena-api}   # CLI/서버 진입점
+│   ├── CLI/{lena-travel,lena-api}   # CLI/서버 진입점
 │   ├── build_travel_index.py   # 여행 인덱스 빌드
 │   └── smoke_travel.py         # 여행 스모크 테스트
 ├── data/                       # (gitignore) 원본 + 생성 데이터(DB/FAISS/세션)
 └── src/
-    ├── config.py               # 전역 설정 (키/모델/경로/청크/TourAPI/날씨)
-    ├── prompts.py              # 프롬프트 템플릿 (노트 1 + 여행 6종)
-    ├── main.py                 # CLI 진입점 (--agent notes|travel)
+    ├── config.py               # 전역 설정 (키/모델/경로/TourAPI/날씨)
+    ├── prompts.py              # 여행 프롬프트 템플릿 (6종)
+    ├── main.py                 # 여행 CLI 진입점
     ├── api.py                  # FastAPI 앱
     ├── tour_routes.py          # TourAPI 원본 REST 노출 라우터
     ├── front/index.html        # 여행 챗 웹 UI (세션 · SSE)
-    │
-    ├── ingestion.py            # [노트] 문서 로딩 + 청킹
-    ├── vectorstore.py          # [노트] FAISS 빌드/로드
-    ├── graph.py                # [노트] LangGraph (retrieve → generate)
-    ├── rag.py                  # [노트] 파사드 (ask())
     │
     └── travel/                 # [여행] 에이전트 패키지
         ├── travel_agent.py         # 파사드 (세션/스트리밍 래퍼)
@@ -156,26 +139,7 @@ LENA-PJ/
 
 ---
 
-## 에이전트 A — Notes RAG
-
-가장 표준적인 2노드 파이프라인입니다.
-
-```
-마크다운(.md) → 청킹 → Gemini 임베딩 → FAISS
-                                          │
-사용자 질문 ─────────────► retrieve ──► generate(RAG_PROMPT | Gemini) ─► 답변
-```
-
-| 파일 | 역할 |
-|------|------|
-| `src/ingestion.py` | `DirectoryLoader`로 `**/*.md` 로드, `RecursiveCharacterTextSplitter`(500/100) 청킹 |
-| `src/vectorstore.py` | `GoogleGenerativeAIEmbeddings` 임베딩, `data/faiss_index` 저장/로드 |
-| `src/graph.py` | `RAGState{query, documents, answer}`, `retrieve` → `generate` → END |
-| `src/rag.py` | `@lru_cache get_agent()`로 그래프 캐싱, `ask(query)` |
-
----
-
-## 에이전트 B — Travel Planner (핵심)
+## Travel Planner 에이전트 (핵심)
 
 **3노드 LangGraph + 하이브리드 검색 + 다중 의도 라우팅 + 실시간/외부 보강 + 세션 + SSE 스트리밍**을 갖춘 Modular RAG입니다.
 
