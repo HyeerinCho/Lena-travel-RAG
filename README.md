@@ -1,10 +1,9 @@
 # LENA-PJ
 
-LangGraph 기반 **이중 RAG(Retrieval-Augmented Generation) 챗봇**입니다. 하나의 FastAPI 서버가 두 개의 독립적인 에이전트를 제공합니다.
+LangGraph 기반 **RAG(Retrieval-Augmented Generation) 챗봇**입니다.
 
 | 에이전트 | 역할 | 검색 백엔드 |
 |----------|------|-------------|
-| **Notes RAG** | 개인 마크다운 노트 기반 Q&A | FAISS |
 | **Travel Planner** | 한국 여행 POI·코스 검색 및 일정 추천 | SQLite + FAISS 하이브리드 |
 
 **기술 스택**: `Python 3.14+` · `FastAPI` · `LangGraph` · `LangChain` · `Google Gemini(LLM+임베딩)` · `FAISS` · `SQLite` · `Open-Meteo` · `한국관광공사 TourAPI(data.go.kr)`
