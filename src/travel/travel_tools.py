@@ -6,7 +6,7 @@ from typing import Any
 
 from src.config import TRAVEL_DB_PATH, TRAVEL_VECTORSTORE_PATH
 from src.travel.travel_repository import TravelRepository
-from src.vectorstore import _index_exists
+from src.travel.travel_vectorstore import _index_exists
 
 
 class TravelSearchService:

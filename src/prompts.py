@@ -1,13 +1,5 @@
 from langchain_core.prompts import ChatPromptTemplate
 
-RAG_PROMPT = ChatPromptTemplate.from_template("""
-    아래 context를 바탕으로 질문에 답해주세요.
-
-    Context: {context}
-
-    질문: {question}
-""")
-
 TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 당신은 한국 여행 요구사항 추출기입니다.
 사용자 질문과 이전 대화에서 JSON만 출력하세요. 설명 문장 금지.

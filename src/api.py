@@ -6,7 +6,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.rag import ask
 from src.tour_routes import router as tour_router
 from src.travel.travel_agent import (
     ask_travel,
@@ -20,15 +19,6 @@ FRONT_DIR = Path(__file__).resolve().parent / "front"
 
 app = FastAPI(title="LENA Travel RAG API")
 app.include_router(tour_router)
-
-
-class QueryRequest(BaseModel):
-    question: str
-
-
-class QueryResponse(BaseModel):
-    question: str
-    answer: str
 
 
 class TravelQueryRequest(BaseModel):
@@ -118,7 +108,6 @@ def api_info():
     return {
         "message": "LENA API 실행 중",
         "endpoints": [
-            "/query",
             "/travel/query",
             "/travel/sessions",
             "/travel/sessions/{session_id}",
@@ -140,12 +129,6 @@ def api_info():
         },
         "docs": "/docs",
     }
-
-
-@app.post("/query", response_model=QueryResponse)
-def query(request: QueryRequest) -> QueryResponse:
-    answer = ask(request.question)
-    return QueryResponse(question=request.question, answer=answer)
 
 
 @app.post("/travel/query", response_model=TravelQueryResponse)

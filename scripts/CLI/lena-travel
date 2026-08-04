@@ -15,10 +15,6 @@ def main() -> None:
     root = str(_project_root())
     if root not in sys.path:
         sys.path.insert(0, root)
-    # Default to travel agent unless user already passed --agent
-    if "--agent" not in sys.argv:
-        sys.argv.insert(1, "--agent")
-        sys.argv.insert(2, "travel")
     runpy.run_module("src.main", run_name="__main__", alter_sys=True)
 
 

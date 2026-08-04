@@ -16,7 +16,25 @@ from src.config import (
     EMBEDDING_MODEL,
     TRAVEL_VECTORSTORE_PATH,
 )
-from src.vectorstore import _index_exists, load_vectorstore
+
+
+def _index_exists(path: Path | str) -> bool:
+    root = Path(path)
+    return (root / "index.faiss").is_file() and (
+        (root / "index.pkl").is_file() or (root / "index.faiss").is_file()
+    )
+
+
+def load_vectorstore(path: Path | str) -> FAISS:
+    store_path = Path(path)
+    if not _index_exists(store_path):
+        raise FileNotFoundError(f"FAISS 인덱스가 없습니다: {store_path}")
+    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
+    return FAISS.load_local(
+        str(store_path),
+        embeddings,
+        allow_dangerous_deserialization=True,
+    )
 
 
 def _checkpoint_path(store_path: Path) -> Path:
