@@ -133,29 +133,30 @@ LENA-PJ/
             └── tar_rlte_tar.py     # 관광지별 연관 관광지
 ```
 
-| 파일 | 역할 |
-|------|------|
-| `src/config.py` | 환경변수, 모델명, 경로, TourAPI/날씨 설정, 임베딩 배치 설정 |
-| `src/prompts.py` | 여행 프롬프트 템플릿 (의도별 6종) |
-| `src/main.py` | 여행 CLI 진입점 (`question`, `--destination`, `--days`, `--budget`, `--language`) |
-| `src/api.py` | FastAPI — 여행/세션/스트리밍/웹 UI |
-| `src/tour_routes.py` | TourAPI 원본 데이터를 `/travel/*` 로 직통 노출 |
-| `src/front/index.html` | 여행 챗 웹 UI (세션 사이드바 + SSE) |
-| `src/travel/travel_ingestion.py` | 원본 POI JSON·코스 CSV → JSONL 정규화 + Document 변환 |
-| `src/travel/travel_repository.py` | SQLite `places`/`courses` 검색, 도시 별칭 |
-| `src/travel/travel_vectorstore.py` | 여행 FAISS 빌드/로드 (배치 임베딩·429 재시도·체크포인트) |
-| `src/travel/travel_tools.py` | 하이브리드 검색 (SQL + FAISS 병합) |
-| `src/travel/travel_graph.py` | LangGraph 3노드 정의 + 토큰 스트리밍 변형 |
-| `src/travel/travel_agent.py` | 파사드 — `ask_travel` / 세션 / 스트리밍 래퍼 |
-| `src/travel/session_store.py` | 세션·메시지 영속화 (`sessions.db`) |
-| `src/travel/travel_realtime.py` | Open-Meteo 날씨 + 휴무 휴리스틱 |
-| `src/travel/tour_enrich.py` | 질문 의도 감지 → TourAPI 호출 → 보강 텍스트 |
-| `src/travel/tour_api/*` | 관광공사 5개 서비스별 저수준 HTTP 클라이언트 |
-| `eval/dataset.py` | LangSmith Dataset(`lena-travel`) 생성 및 예제 시드 |
-| `scripts/build_travel_index.py` | 여행 인덱스 빌드 (정규화 + SQLite + FAISS) |
-| `scripts/smoke_travel.py` | 여행 에이전트 스모크 테스트 |
-| `scripts/CLI/lena-travel` | 여행 CLI 래퍼 → `src/main.py` |
-| `scripts/CLI/lena-api` | Uvicorn 서버 래퍼 → `src.api:app` |
+
+| 파일                                 | 역할                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `src/config.py`                    | 환경변수, 모델명, 경로, TourAPI/날씨 설정, 임베딩 배치 설정                                      |
+| `src/prompts.py`                   | 여행 프롬프트 템플릿 (의도별 6종)                                                         |
+| `src/main.py`                      | 여행 CLI 진입점 (`question`, `--destination`, `--days`, `--budget`, `--language`) |
+| `src/api.py`                       | FastAPI — 여행/세션/스트리밍/웹 UI                                                    |
+| `src/tour_routes.py`               | TourAPI 원본 데이터를 `/travel/*` 로 직통 노출                                          |
+| `src/front/index.html`             | 여행 챗 웹 UI (세션 사이드바 + SSE)                                                    |
+| `src/travel/travel_ingestion.py`   | 원본 POI JSON·코스 CSV → JSONL 정규화 + Document 변환                                 |
+| `src/travel/travel_repository.py`  | SQLite `places`/`courses` 검색, 도시 별칭                                          |
+| `src/travel/travel_vectorstore.py` | 여행 FAISS 빌드/로드 (배치 임베딩·429 재시도·체크포인트)                                        |
+| `src/travel/travel_tools.py`       | 하이브리드 검색 (SQL + FAISS 병합)                                                    |
+| `src/travel/travel_graph.py`       | LangGraph 3노드 정의 + 토큰 스트리밍 변형                                                |
+| `src/travel/travel_agent.py`       | 파사드 — `ask_travel` / 세션 / 스트리밍 래퍼                                            |
+| `src/travel/session_store.py`      | 세션·메시지 영속화 (`sessions.db`)                                                   |
+| `src/travel/travel_realtime.py`    | Open-Meteo 날씨 + 휴무 휴리스틱                                                      |
+| `src/travel/tour_enrich.py`        | 질문 의도 감지 → TourAPI 호출 → 보강 텍스트                                               |
+| `src/travel/tour_api/*`            | 관광공사 5개 서비스별 저수준 HTTP 클라이언트                                                  |
+| `eval/dataset.py`                  | LangSmith Dataset(`lena-travel`) 생성 및 예제 시드                                  |
+| `scripts/build_travel_index.py`    | 여행 인덱스 빌드 (정규화 + SQLite + FAISS)                                             |
+| `scripts/smoke_travel.py`          | 여행 에이전트 스모크 테스트                                                              |
+| `scripts/CLI/lena-travel`          | 여행 CLI 래퍼 → `src/main.py`                                                    |
+| `scripts/CLI/lena-api`             | Uvicorn 서버 래퍼 → `src.api:app`                                                |
 
 
 
@@ -311,9 +312,13 @@ uv run python eval/dataset.py
 
 여행 플래너로 확장하면서 "검색 → 생성"만 하는 단순 RAG가 아니라, 의도별 라우팅 · 하이브리드 검색 · 실시간 날씨 · 관광공사 API 보강 · 세션까지 얹은 Modular RAG 형태가 되었다. 외부 API가 실패해도 빈 컨텍스트로 챗봇이 계속 동작하도록 다른 장애가 발생했을 때를 대비해 격리한 부분이 마음에 든다.
 
-아래 과정 반복하여 학습
+조금 늦게 마음먹고 시작하는 바람에 절대적인 시간이 부족했지만 어떤식으로 접근해야 되는지 앞으로 프로젝트를 어떻게 대해야 할지에 대한 개인적인 태도를 만들고자 하는 시간이였다. 또한, 실제로 LLM에게 거의 모든 것을 의탁하여 코드를 짜도록 하였더니 기술이 늘어나고 복잡해질 수록 처음엔 금방 익힐 수 있는 양이라고 생각했다가 그러지 못한다는 것을 깨닫는 계기가 된 시간이다. 
 
-- 코드 뜯어보기 - AI 없이 부분부분 손코딩 - 전체 틀 이해하기
+
+
+[아래 과정 반복하여 학습]
+
+- 코드 뜯어보기 - AI 없이 부분부분 손코딩(노트/수도코드) - 공식문서와 웹 서핑으로만 정보 확인 후 짜기 - 전체 틀 이해하기
 - 위 과정을 진행하며 리팩토링 해보기
 - 프롬프트 다듬기
 - 추가적인 기술 추가
