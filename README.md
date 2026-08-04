@@ -31,7 +31,7 @@ LangChain + LangGraph 기반 **여행 플래너 RAG 챗봇**을 직접 구축하
 
 ## 3. 핵심 개념 정리
 
-
+![](docs/assets/lena_rag_architecture.png)
 
 ### 3-1. RAG 흐름 (Advanced / Modular RAG)
 
