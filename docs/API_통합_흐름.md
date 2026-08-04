@@ -41,12 +41,15 @@
 ```
 
 핵심 요약: **관광공사 API는 두 갈래로 쓰입니다.**
-- **④-A 경로**: 데이터를 가공 없이 그대로 REST 엔드포인트(`/travel/kor/*` 등)로 노출 → 프론트/외부에서 직접 사용.
+
+- **④-A 경로**: 데이터를 가공 없이 그대로 REST 엔드포인트(`/travel/kor/`* 등)로 노출 → 프론트/외부에서 직접 사용.
 - **④-B → ⑦ 경로**: 데이터를 "보강 컨텍스트(텍스트)"로 만들어 **LLM 프롬프트에 끼워 넣어** 답변에 반영.
 
 이 문서의 주제인 "엔드포인트부터 모델에 통합"은 주로 **④-B → ⑦ 경로**입니다.
 
 ---
+
+
 
 ## 1단계 — 설정값 정의 (`src/config.py`)
 
@@ -68,11 +71,14 @@ TAR_RLTE_TAR_BASE_URL = f"{_TOURAPI_BASE}/TarRlteTarService1"
 
 ---
 
+
+
 ## 2단계 — 공통 HTTP 클라이언트 (`src/travel/tour_api/_client.py`)
 
 실제 네트워크 요청을 담당하는 **가장 낮은 레벨의 엔드포인트 호출부**. 외부 SDK 없이 `urllib`만 사용합니다.
 
 `request()` 함수가 하는 일 (순서대로):
+
 1. 공통 쿼리 파라미터 조립 — `serviceKey`, `MobileOS`, `MobileApp`, `_type=json`.
 2. `{base_url}/{operation}?{params}` 형태로 URL 생성 후 `urllib`로 GET 호출.
 3. 응답을 JSON 파싱. (인증 실패 시 XML이 오면 `TourAPIError` 발생)
@@ -80,23 +86,28 @@ TAR_RLTE_TAR_BASE_URL = f"{_TOURAPI_BASE}/TarRlteTarService1"
 5. 성공 시 `response.body`(dict) 반환.
 
 부가 유틸:
+
 - `normalize_items(body)` : `items.item` 을 항상 **list** 로 정규화 (단건이면 `[dict]`).
 - `paged(body)` : 목록형 응답을 `{items, page_no, num_of_rows, total_count}` 표준 형태로 변환.
 - `TourAPIError` : 이 레이어의 모든 실패를 하나의 예외로 통일 → 상위에서 일관되게 처리.
 
 ---
 
+
+
 ## 3단계 — 서비스별 래퍼 (`src/travel/tour_api/*.py`)
 
 각 오픈 API 서비스를 파이썬 함수로 감싼 얇은 레이어. 오퍼레이션명·파라미터명(카멜케이스)을 숨기고, 읽기 쉬운 함수 시그니처를 제공합니다.
 
-| 모듈 | 서비스 | 대표 함수 |
-|------|--------|-----------|
-| `kor_service.py` | 국문 관광정보 KorService2 | `search_keyword`, `area_based_list`, `detail_common`, `detail_image` ... |
-| `kor_pet_tour.py` | 반려동물 동반여행 | `search_keyword`, `area_based_list`, `detail_pet_tour` |
-| `kor_with_service.py` | 무장애 여행 | `search_keyword`, `area_based_list`, `detail_with_tour` |
-| `durunubi.py` | 두루누비 걷기여행길 | `course_list`, `route_list` |
-| `tar_rlte_tar.py` | 관광지별 연관 관광지 | `area_based_list`, `search_keyword` |
+
+| 모듈                    | 서비스                 | 대표 함수                                                                    |
+| --------------------- | ------------------- | ------------------------------------------------------------------------ |
+| `kor_service.py`      | 국문 관광정보 KorService2 | `search_keyword`, `area_based_list`, `detail_common`, `detail_image` ... |
+| `kor_pet_tour.py`     | 반려동물 동반여행           | `search_keyword`, `area_based_list`, `detail_pet_tour`                   |
+| `kor_with_service.py` | 무장애 여행              | `search_keyword`, `area_based_list`, `detail_with_tour`                  |
+| `durunubi.py`         | 두루누비 걷기여행길          | `course_list`, `route_list`                                              |
+| `tar_rlte_tar.py`     | 관광지별 연관 관광지         | `area_based_list`, `search_keyword`                                      |
+
 
 예시 — 키워드 검색은 결국 `_client.request()` 로 위임됩니다.
 
@@ -121,7 +132,11 @@ def search_keyword(
 
 ---
 
+
+
 ## 4단계 — 두 갈래로 나뉘는 소비 지점
+
+
 
 ### ④-A. REST 엔드포인트로 그대로 노출 (`src/tour_routes.py`)
 
@@ -139,15 +154,17 @@ def _call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 ```
 
+
+
 ### ④-B. 보강 컨텍스트 생성 (`src/travel/tour_enrich.py`) ← 모델 통합의 핵심 진입점
 
 사용자 질문을 분석해 **관광공사 데이터를 LLM이 읽을 수 있는 텍스트**로 만듭니다.
 
 1. **의도 감지** `detect_kinds(query)` — 정규식으로 질문에서 의도 추출:
-   - `pet`(반려동물), `barrier`(무장애), `trail`(걷기여행길)
+  - `pet`(반려동물), `barrier`(무장애), `trail`(걷기여행길)
 2. **지역코드 변환** `resolve_area_code(destination)` — "제주" → `39` 처럼 도시명을 areaCode로 매핑.
 3. **데이터 수집** — 감지된 의도에 맞는 서비스 함수 호출 (`kor_pet_tour`, `kor_with_service`, `durunubi`).
-   - **실패해도 조용히 빈 결과 반환** → 챗봇 기본 동작을 절대 깨지 않음.
+  - **실패해도 조용히 빈 결과 반환** → 챗봇 기본 동작을 절대 깨지 않음.
 4. **텍스트 조립** `build_tour_context()` — 사람이 읽는 형태의 섹션 텍스트로 변환해 반환:
 
 ```227:231:src/travel/tour_enrich.py
@@ -161,6 +178,8 @@ def _call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 > `text` 필드가 곧 프롬프트에 주입될 문자열, `data` 는 응답 JSON의 `external` 필드로 나갑니다.
 
 ---
+
+
 
 ## 5단계 — 그래프에서 컨텍스트 수집 (`src/travel/travel_graph.py` · `search_candidates` 노드)
 
@@ -189,6 +208,8 @@ extract_requirements → search_candidates → build_itinerary
 - `external` : 원본 데이터. 최종 응답의 `external` 필드로 그대로 전달.
 
 ---
+
+
 
 ## 6단계 — 프롬프트에 주입 (`build_itinerary` 노드)
 
@@ -232,6 +253,8 @@ extract_requirements → search_candidates → build_itinerary
 
 ---
 
+
+
 ## 7단계 — LLM(Gemini) 호출 및 답변 생성
 
 - 모델: `ChatGoogleGenerativeAI(model=LLM_MODEL, temperature=0.2)` (`LLM_MODEL = "gemini-2.5-flash"`).
@@ -243,7 +266,11 @@ extract_requirements → search_candidates → build_itinerary
 
 ---
 
+
+
 ## 8단계 — Facade & FastAPI 응답
+
+
 
 ### 8-1. Facade (`src/travel/travel_agent.py`)
 
@@ -262,6 +289,8 @@ extract_requirements → search_candidates → build_itinerary
         "external": result.get("external") or {},
     }
 ```
+
+
 
 ### 8-2. FastAPI 엔드포인트 (`src/api.py`)
 
@@ -285,6 +314,8 @@ def travel_query(request: TravelQueryRequest) -> TravelQueryResponse:
 
 ---
 
+
+
 ## 정리 — 요청 한 건의 전체 여정
 
 사용자가 `"제주 반려동물이랑 갈만한 2박3일 여행 추천해줘"` 라고 물으면:
@@ -306,17 +337,22 @@ def travel_query(request: TravelQueryRequest) -> TravelQueryResponse:
 
 ---
 
+
+
 ## 참고: 관련 파일 지도
 
-| 계층 | 파일 | 역할 |
-|------|------|------|
-| 설정 | `src/config.py` | 인증키·Base URL·타임아웃 |
-| HTTP | `src/travel/tour_api/_client.py` | 공통 요청/정규화/에러 |
-| 서비스 | `src/travel/tour_api/{kor_service,kor_pet_tour,kor_with_service,durunubi,tar_rlte_tar}.py` | 서비스별 래퍼 |
-| REST 노출 | `src/tour_routes.py` | 원본 데이터를 `/travel/*` 로 직통 노출 |
-| 보강 | `src/travel/tour_enrich.py` | 의도 감지 → 보강 텍스트 생성 |
-| 그래프 | `src/travel/travel_graph.py` | 컨텍스트 수집 + 프롬프트 주입 + LLM 호출 |
-| 실시간 | `src/travel/travel_realtime.py` | 날씨/휴무 컨텍스트 (보강 텍스트와 병합) |
-| 프롬프트 | `src/prompts.py` | `{realtime}` 자리로 컨텍스트 삽입 |
-| Facade | `src/travel/travel_agent.py` | 그래프 실행 래퍼 + 세션 |
-| API | `src/api.py` | FastAPI 엔드포인트/응답 모델 |
+
+| 계층      | 파일                                                                                         | 역할                          |
+| ------- | ------------------------------------------------------------------------------------------ | --------------------------- |
+| 설정      | `src/config.py`                                                                            | 인증키·Base URL·타임아웃           |
+| HTTP    | `src/travel/tour_api/_client.py`                                                           | 공통 요청/정규화/에러                |
+| 서비스     | `src/travel/tour_api/{kor_service,kor_pet_tour,kor_with_service,durunubi,tar_rlte_tar}.py` | 서비스별 래퍼                     |
+| REST 노출 | `src/tour_routes.py`                                                                       | 원본 데이터를 `/travel/*` 로 직통 노출 |
+| 보강      | `src/travel/tour_enrich.py`                                                                | 의도 감지 → 보강 텍스트 생성           |
+| 그래프     | `src/travel/travel_graph.py`                                                               | 컨텍스트 수집 + 프롬프트 주입 + LLM 호출  |
+| 실시간     | `src/travel/travel_realtime.py`                                                            | 날씨/휴무 컨텍스트 (보강 텍스트와 병합)     |
+| 프롬프트    | `src/prompts.py`                                                                           | `{realtime}` 자리로 컨텍스트 삽입    |
+| Facade  | `src/travel/travel_agent.py`                                                               | 그래프 실행 래퍼 + 세션              |
+| API     | `src/api.py`                                                                               | FastAPI 엔드포인트/응답 모델         |
+
+
