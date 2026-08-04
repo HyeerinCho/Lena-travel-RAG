@@ -34,7 +34,7 @@ LangChain + LangGraph 기반 **여행 플래너 RAG 챗봇**을 직접 구축하
 
 | 1   | 2   |
 | --- | --- |
-|     |     |
+| ![](docs/assets/lena_rag_architecture.png) | ![](docs/assets/lena_travel_rag_korean.png) |
 
 
 
