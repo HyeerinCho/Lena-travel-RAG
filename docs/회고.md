@@ -1,14 +1,16 @@
 # LENA-PJ — 과제 회고
 
-LangChain + LangGraph 기반 RAG 파이프라인을 직접 구축하며 정리한 과제 회고 문서입니다.
+LangChain + LangGraph 기반 **여행 플래너 RAG 챗봇**을 직접 구축하며 정리한 과제 회고 문서입니다.
 
 ---
 
 ## 1. 과제 목표
 
-- LangChain + LangGraph 기반 **RAG 파이프라인 구축**
-- **FastAPI**로 REST API 래핑
-- **LangSmith**로 체인 실행 Tracing 및 Dataset 기반 평가 (진행 중)
+- LangChain + LangGraph 기반 **RAG 파이프라인 구축** — 한국 여행 POI·코스 검색 및 일정 추천
+- **하이브리드 검색**(SQLite 정형 필터 + FAISS 시맨틱)으로 후보 확보
+- **FastAPI**로 REST API + 웹 UI(세션·SSE) 래핑, **CLI** 병행 제공
+- 외부 데이터(한국관광공사 TourAPI)·실시간(Open-Meteo 날씨)을 **프롬프트 컨텍스트로 주입**
+- **LangSmith**로 체인 실행 Tracing 및 Dataset 기반 평가 (선택)
 
 ---
 
@@ -16,93 +18,114 @@ LangChain + LangGraph 기반 RAG 파이프라인을 직접 구축하며 정리�
 
 | 버전 | 핵심 변경 | 결과 | 날짜 |
 |------|-----------|------|------|
-| **v0** | `plain_rag.py` — LangChain 없이 RAG 직접 구현 (로딩 → 청킹 → 임베딩 → 코사인 유사도 검색 → 생성) | RAG 원리 이해, 단일 파일 프로토타입 | 6/30 |
-| **v1** | `alex-rag` 데모 참고, LangChain 스택 도입 (ingestion → vectorstore → chain / graph 분리), `data/alex-notes` 연결하여 DB로 사용 | 기본 구조 완성, CLI(graph)와 API(chain) 이원화 | 7/6 |
-| **v2** | Phase 1 리팩터링 — `prompts.py` 프롬프트 분리, `rag.py` + `ask()` 단일 진입점, LangGraph를 RAG 코어로 통일, `chain.py` 제거 · 그래프 마이그레이션 | CLI·API가 동일한 LangGraph 파이프라인 공유 | 7/9 |
-| **v3** | Phase 2 부분 완료 — `config.py` API 키 검증, `VECTORSTORE_PATH` 일원화, `CHUNK_SIZE`/`CHUNK_OVERLAP` config 이동 | 설정 중복 제거, 시작 시 에러 명확화 | 7/9 |
+| **v0** | 여행 에이전트 골격 — LangGraph 3노드(추출 → 검색 → 생성), SQLite+FAISS 하이브리드 검색, 세션 UI/사이드바 | 여행 일정 생성 기본 동작 | 7/21~7/22 |
+| **v1** | 다중 의도 라우팅 — `city_list`(도시 추천), `rewrite_day`(특정 일자만 재작성), 권역 기반 추천 정제 | 질문 유형별 프롬프트 분기 | 7/22 |
+| **v2** | 일정 UI 개편 — 일자 블록 토글, 접근성 속성, 마크다운 렌더링, JSON/Markdown 내보내기 | 결과 가독성·상호작용 향상 | 7/24 |
+| **v3** | 실시간 컨텍스트 — Open-Meteo 날씨 예보 + 휴무 휴리스틱 주입 | 날씨 반영 일정 | 7/28 |
+| **v4** | TourAPI 통합 — 반려동물/무장애/두루누비 등 5개 서비스 보강 텍스트 주입, `/travel/*` 직통 REST 노출, `multi_itinerary`·`qa` 의도, 숙소·활동·축제 보강 | Modular RAG 완성 | 7/29 |
+| **v5** | 문서화 — README, 아키텍처 구조도, TourAPI→LLM 통합 흐름 문서 정리 | 구조 설명 정비 | 8/4 |
 
 ---
 
 ## 3. 핵심 개념 정리
 
-### 3-1. RAG 흐름
+### 3-1. RAG 흐름 (Advanced / Modular RAG)
 
 ```
-사용자 입력
+사용자 질문 (+ 세션 히스토리 / 이전 일정)
     ↓
-[ingestion] data/alex-notes/*.md 로딩 → RecursiveCharacterTextSplitter 청킹 (500자, overlap 100)
+[Pre-Retrieval] extract_requirements
+    휴리스틱 정규식 + LLM JSON 추출 → 의도(intent)/목적지/일수/예산 결정
     ↓
-[vectorstore] Gemini embedding → FAISS 인덱스 (data/faiss_index/ 디스크 캐싱)
+[Retrieval] search_candidates
+    SQL 필터(travel.db) + FAISS 시맨틱 검색 → 병합·중복 제거
+    (+ TourAPI 보강 텍스트 수집)
     ↓
-[LangGraph — retrieve 노드] 질문과 유사한 문서 청크 검색
+[Post-Retrieval + Generation] build_itinerary
+    실시간(날씨) · 외부(TourAPI) 컨텍스트 주입 → 의도별 프롬프트 → Gemini 생성
     ↓
-[LangGraph — generate 노드] context + prompt → Gemini 답변 생성
-    ↓
-답변 반환
+answer + itinerary(JSON) + warnings + sources + external 반환
 ```
 
-### 3-2. 모델 구성 (현재)
+### 3-2. 모델 · 백엔드 구성 (현재)
 
-| 역할 | 모델 |
+| 역할 | 구성 |
 |------|------|
-| 임베딩 | Google `gemini-embedding-001` |
-| 답변 생성 | Google `gemini-2.5-flash` |
-| 벡터 DB | FAISS (로컬 파일) |
-| 평가 (예정) | LangSmith Dataset `lena-rag` |
+| 임베딩 | Google `models/gemini-embedding-001` |
+| 답변 생성 | Google `gemini-2.5-flash` (temperature 0.2) |
+| 정형 검색 | SQLite `travel.db` (places · courses) |
+| 시맨틱 검색 | FAISS (로컬 파일, POI 1500 + 코스 2000) |
+| 실시간 | Open-Meteo 날씨 예보 (API 키 불필요) |
+| 외부 보강 | 한국관광공사 TourAPI 5종 (data.go.kr B551011) |
+| 세션 | SQLite `sessions.db` |
+| 평가 (선택) | LangSmith Dataset `lena-travel` |
 
 ### 3-3. 파일 구조
 
 | 파일 | 역할 |
 |------|------|
-| `data/alex-notes/*.md` | RAG 검색 대상 — 개인 학습·일기·프로젝트 노트 |
-| `src/config.py` | 환경변수, 모델명, 경로, 청킹 설정 |
-| `src/ingestion.py` | 마크다운 로딩 + 텍스트 청킹 |
-| `src/vectorstore.py` | FAISS 생성/로드 (디스크 캐싱) |
-| `src/prompts.py` | RAG 프롬프트 템플릿 |
-| `src/graph.py` | LangGraph RAG — retrieve → generate 노드 |
-| `src/rag.py` | lazy init + `ask(query)` 단일 API |
-| `src/main.py` | CLI — `lena` 명령 진입점 |
-| `src/api.py` | FastAPI — `POST /query` 엔드포인트 |
-| `eval/dataset.py` | LangSmith Dataset 생성 및 예제 시드 |
-| `scripts/lena` | CLI 래퍼 |
-| `scripts/lena-api` | Uvicorn 서버 래퍼 |
+| `src/config.py` | 환경변수, 모델명, 경로, TourAPI/날씨 설정, 임베딩 배치 설정 |
+| `src/prompts.py` | 여행 프롬프트 템플릿 (의도별 6종) |
+| `src/main.py` | 여행 CLI 진입점 (`argparse`) |
+| `src/api.py` | FastAPI — 여행/세션/스트리밍/웹 UI |
+| `src/tour_routes.py` | TourAPI 원본 데이터를 `/travel/*` 로 직통 노출 |
+| `src/front/index.html` | 여행 챗 웹 UI (세션 사이드바 + SSE) |
+| `src/travel/travel_ingestion.py` | 원본 POI JSON·코스 CSV → JSONL 정규화 + Document 변환 |
+| `src/travel/travel_repository.py` | SQLite `places`/`courses` 검색, 도시 별칭 |
+| `src/travel/travel_vectorstore.py` | 여행 FAISS 빌드/로드 (배치 임베딩·429 재시도·체크포인트) |
+| `src/travel/travel_tools.py` | 하이브리드 검색 (SQL + FAISS 병합) |
+| `src/travel/travel_graph.py` | LangGraph 3노드 정의 + 토큰 스트리밍 변형 |
+| `src/travel/travel_agent.py` | 파사드 — `ask_travel` / 세션 / 스트리밍 래퍼 |
+| `src/travel/session_store.py` | 세션·메시지 영속화 (`sessions.db`) |
+| `src/travel/travel_realtime.py` | Open-Meteo 날씨 + 휴무 휴리스틱 |
+| `src/travel/tour_enrich.py` | 질문 의도 감지 → TourAPI 호출 → 보강 텍스트 |
+| `src/travel/tour_api/*` | 관광공사 5개 서비스별 저수준 HTTP 클라이언트 |
+| `eval/dataset.py` | LangSmith Dataset(`lena-travel`) 생성 및 예제 시드 |
+| `scripts/build_travel_index.py` | 여행 인덱스 빌드 (정규화 + SQLite + FAISS) |
+| `scripts/CLI/lena-travel` | 여행 CLI 래퍼 |
+| `scripts/CLI/lena-api` | Uvicorn 서버 래퍼 |
 
 ### 3-4. 실행 흐름 (CLI 기준)
 
 ```
-사용자가 lena "LangChain이 뭐야?" 실행
+사용자가 lena-travel "제주 2박3일 여행 추천해줘" 실행
     ↓
-scripts/lena → src/main.py
+scripts/CLI/lena-travel → src/main.py (argparse: question, --destination, --days, --budget, --language)
     ↓
-src/rag.py — ask(query)
+src/travel/travel_agent.py — ask_travel(question, ...)
     ↓
-src/rag.py — get_rag_graph()  [최초 1회만 실행]
-    ├── ingestion.load_and_split(DATA_PATH)  → 45개 문서, 387개 청크
-    ├── vectorstore.build_vectorstore(chunks)  → FAISS 로드 또는 생성
-    └── graph.build_rag_graph(vectorstore)  → LangGraph 컴파일
+travel_agent — get_travel_agent()  [@lru_cache, 최초 1회만 그래프/검색/세션 준비]
     ↓
-graph — retrieve 노드
-    ├── retriever.invoke(query)  → 유사 문서 k개 검색
-    └── state["documents"] 업데이트
+travel_graph — ① extract_requirements
+    ├── 휴리스틱 정규식 + LLM JSON 추출
+    └── 의도/목적지/일수/예산 확정
     ↓
-graph — generate 노드
-    ├── context = 문서 청크 join
-    ├── RAG_PROMPT + gemini-2.5-flash → 답변 생성
-    └── state["answer"] 업데이트
+travel_graph — ② search_candidates
+    ├── TravelSearchService: SQL 필터(travel.db) + FAISS 시맨틱 → 병합·중복 제거
+    └── build_tour_context(): 의도 감지 시 TourAPI 보강 텍스트 수집
     ↓
-ask() — result["answer"] 반환 → 터미널 출력
+travel_graph — ③ build_itinerary
+    ├── build_realtime_context(): Open-Meteo 날씨/휴무 → realtime_text
+    ├── realtime_text + external_text(TourAPI) 를 프롬프트에 주입
+    └── 의도별 프롬프트 + gemini-2.5-flash → JSON 답변 생성/파싱
+    ↓
+ask_travel() — result 반환 → main.py 가 질문/답변/경고 터미널 출력
 ```
 
 ### 3-5. 실행 흐름 (FastAPI 기준)
 
 ```
-사용자가 POST /query {"question": "RAG가 뭐야?"} 전송
+사용자가 POST /travel/query {"question": "...", "destination": "제주", "days": 3} 전송
     ↓
-src/api.py — query()
+src/api.py — travel_query()
     ↓
-src/rag.py — ask(question)  [CLI와 동일한 파이프라인]
+src/travel/travel_agent.py — ask_travel(...)  [CLI와 동일한 그래프 파이프라인]
     ↓
-QueryResponse(question, answer) JSON 응답
+TravelQueryResponse(question, answer, itinerary, warnings, sources, external ...) JSON 응답
+
+# 세션/스트리밍 경로
+POST /travel/sessions/{id}/query          → ask_travel_in_session()  (히스토리 주입 + 저장)
+POST /travel/sessions/{id}/query/stream   → stream_travel_in_session()  (SSE 토큰 스트리밍)
 ```
 
 ---
@@ -111,43 +134,58 @@ QueryResponse(question, answer) JSON 응답
 
 | 문제 | 원인 | 해결 | 파일 |
 |------|------|------|------|
-| `python` 명령 not found | `.python-version`이 3.14인데 pyenv에는 3.11만 설치 | `source .venv/bin/activate` 또는 `uv run` 사용 | `.python-version`, `.venv` |
-| `build_rag_graph() takes 0 positional arguments` | `graph.py`에 새/옛 `build_rag_graph` 함수가 중복 정의, 나중 정의가 덮어씀 | 41행 이후 예전 코드 삭제 | `src/graph.py` |
-| CLI와 API가 다른 RAG 사용 | `main.py`는 graph, `api.py`는 chain 사용 | `ask()` 단일 진입점으로 통일, `chain.py` 제거 | `src/rag.py`, `src/api.py` |
-| import 시마다 문서 로딩·인덱싱 | `graph.py` 모듈 레벨에서 `load_and_split` 실행 | `@lru_cache` + `get_rag_graph()`로 lazy init | `src/rag.py` |
-| 매번 인덱싱 (초기) | 벡터를 RAM에만 저장 | FAISS `save_local` / `load_local`로 디스크 캐싱 | `src/vectorstore.py` |
+| `.env` 가 push 됨 | 커밋 대상에 `.env` 포함 | `.gitignore` 확인 후 추적 제외, `.env.example`만 유지 | `.gitignore`, `.env.example` |
+| 임베딩 도중 청킹이 멈춤 | Gemini free tier embed 100 req/min 초과 | 배치(80건)마다 65초 대기 + 429 재시도 + 체크포인트 재개 | `src/config.py`, `src/travel/travel_vectorstore.py` |
+| macOS 한글 경로(NFD) 로 데이터 폴더 못 찾음 | 파일시스템이 NFD Hangul 사용 | `resolve_data_dir()`로 NFC 정규화 후 탐색 | `src/config.py` |
 | API 키 없을 때 불명확한 에러 | `GOOGLE_API_KEY` None 검증 없음 | 시작 시 `ValueError` 발생 | `src/config.py` |
-| Gemini API 토큰 부족 | free tier embed 100 req/min | 1분당 할당되기 때문에 토큰 초기화까지 대기 걸어둠 | `src/config.py` |
+| TourAPI Encoding 키 사용 시 이중 인코딩 | `urlencode`가 다시 인코딩 | data.go.kr "일반 인증키(Decoding)" 값 사용하도록 통일 | `src/config.py`, `src/travel/tour_api/_client.py` |
+| 외부 API 실패 시 챗봇 전체 중단 우려 | TourAPI/날씨 호출이 답변 경로에 결합 | 실패해도 빈 컨텍스트 반환 → 기본 동작 유지(장애 격리) | `src/travel/tour_enrich.py`, `src/travel/travel_realtime.py` |
+| import 시마다 그래프/인덱스 초기화 | 모듈 레벨 초기화 | `@lru_cache` + `get_travel_agent()`로 lazy init | `src/travel/travel_agent.py` |
+| 질문 유형 무시하고 항상 일정만 생성 | 단일 프롬프트 | 의도(intent) 라우팅으로 `city_list`/`qa`/`rewrite_day`/`multi_itinerary`/`itinerary` 분기 | `src/travel/travel_graph.py`, `src/prompts.py` |
 
 ---
 
 ## 5. 실행 방법
 
-### 가상환경 실행
+### 가상환경 설치
 
 ```bash
 uv sync
-source .venv/bin/activate   # 또는 매번 uv run 사용
+```
+
+### 여행 인덱스 빌드 (최초 1회)
+
+```bash
+# 전체 빌드 (정규화 + SQLite + FAISS)
+uv run python scripts/build_travel_index.py
+
+# SQLite만 빠르게 (FAISS 생략)
+uv run python scripts/build_travel_index.py --skip-faiss
+
+# FAISS만 다시 생성
+uv run python scripts/build_travel_index.py --faiss-only --force-faiss
 ```
 
 ### CLI
 
 ```bash
-lena                        # 기본 질문: "RAG가 뭐야?"
-lena "LangChain이 뭐야?"    # 질문 지정
+uv run python scripts/CLI/lena-travel                                  # 기본 질문
+uv run python scripts/CLI/lena-travel "제주 2박3일 자연 경관 위주 추천해줘"   # 질문 지정
+uv run python scripts/CLI/lena-travel "부산 여행" --destination 부산 --days 2 --budget 300000 --language ko
 ```
 
-### API 서버
+### API 서버 + 웹 UI
 
 ```bash
-lena-api
-# 다른 터미널
-curl -X POST http://localhost:8000/query \
+uv run python scripts/CLI/lena-api      # → http://localhost:8000 (웹 UI)
+
+# 다른 터미널에서 API 직접 호출
+curl -X POST http://localhost:8000/travel/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "RAG가 뭐야?"}'
+  -d '{"question": "제주 반려동물이랑 갈만한 2박3일 여행 추천해줘", "destination": "제주", "days": 3}'
 ```
 
-### LangSmith Dataset 시드
+### LangSmith Dataset 시드 (선택)
 
 ```bash
 uv run python eval/dataset.py
@@ -161,7 +199,9 @@ uv run python eval/dataset.py
 
 수업시간에 그렇게 `.env` 파일을 항상 신경써야 된다고 했는데 왜 push가 안되지? 하고 보니까 `.env`파일을 push 하려고 하고 있었다. 깜짝 놀랬다...
 
-중간에 청크가 안되고 멈춰있는 상황이 있어서 무슨일인지 보아하니 gemini api 분당 최대 토큰을 다쓴 상황이여서 토큰 없으면 60초 기다려 새롭게 갱신되면 돌아가도록 했다. 좀 오래 걸리긴했지만 한 번만 하고 벡터 DB에 저장해둬서 불러와서 사용할 수 있어서 편했다.
+중간에 청크가 안되고 멈춰있는 상황이 있어서 무슨일인지 보아하니 gemini api 분당 최대 토큰을 다쓴 상황이여서 토큰 없으면 대기했다가 새롭게 갱신되면 돌아가도록 했다. 좀 오래 걸리긴했지만 한 번만 하고 벡터 DB(FAISS)에 저장해둬서 불러와서 사용할 수 있어서 편했다. 데이터 양이 많아 배치(80건)마다 대기 + 재시도 + 체크포인트로 중간에 끊겨도 이어서 인덱싱되게 만든 게 특히 유용했다.
+
+여행 플래너로 확장하면서 "검색 → 생성"만 하는 단순 RAG가 아니라, 의도별 라우팅 · 하이브리드 검색 · 실시간 날씨 · 관광공사 API 보강 · 세션까지 얹은 Modular RAG 형태가 되었다. 외부 API가 실패해도 빈 컨텍스트로 챗봇이 계속 동작하도록 장애를 격리한 부분이 마음에 든다.
 
 중간중간 실습이나 수업시간에 했던 내용과 프로젝트의 내용이 연결되지 않고 따로 논다는 생각이 들었다. 이걸 어떻게 해결하면 좋을까... → 우선은 교재를 다시 봐야겠다.
 
@@ -177,5 +217,6 @@ uv run python eval/dataset.py
 ### 6-2. 앞으로 할 일
 
 - [ ] `pyproject.toml` 미사용 의존성 정리 (`google-generativeai`, `numpy`, `pypdf`, `ragas`)
-- [ ] LangSmith Dataset 기반 평가
-- [ ] retriever `top_k` 튜닝, 빈 검색 fallback
+- [ ] LangSmith Dataset(`lena-travel`) 기반 평가
+- [ ] 하이브리드 검색 가중치/`top_k` 튜닝, 빈 검색 fallback 개선
+- [ ] TourAPI 의도 감지 정확도 향상 (pet/barrier/trail 외 확장)
