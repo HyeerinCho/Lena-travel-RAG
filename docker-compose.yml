@@ -1,6 +1,6 @@
 services:
   lena:
-    image: ghcr.io/<owner>/<repo>:latest
+    image: ghcr.io/hyeerincho/lena-travel-rag:latest
     container_name: lena-api
     ports:
       - "8000:8000"
