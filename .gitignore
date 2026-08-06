@@ -19,4 +19,5 @@ data/travel/
 
 # IDE / OS
 .DS_Store
-.cursor/
+.cursor/travel-data.tar.gz
+*.tar.gz
