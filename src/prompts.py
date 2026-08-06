@@ -13,9 +13,14 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
   "language": "ko"|"en",
   "place_types": string[],      // 가능하면 관광지/문화시설/음식점/숙박 중 선택
   "rewrite_day": number|null,   // N일차만 재작성 요청이면 해당 일차, 아니면 null
-  "intent": "itinerary"|"city_list"|"qa",  // 아래 규칙 참고, 기본값 "itinerary"
-  "exclude_cities": string[],   // 사용자가 "빼고/말고/제외"라고 한 도시들 (예: ["서울","부산"])
-  "itinerary_count": number|null // 서로 다른 일정을 여러 개 원할 때 그 개수, 아니면 null
+  "intent": "itinerary"|"city_list"|"place_list"|"qa"|"meta"|"edit",  // 아래 규칙 참고
+  "exclude_cities": string[],   // 사용자가 "빼고/말고/제외"라고 한 도시들
+  "exclude_places": string[],   // 싫어하거나 빼고 싶은 장소명 (예: ["경복궁"])
+  "itinerary_count": number|null, // 서로 다른 일정을 여러 개 원할 때 그 개수
+  "start_date": string|null,    // 여행 시작일 YYYY-MM-DD (명시된 경우만)
+  "insert_place": string|null,  // "~을 N일차에 넣어줘"일 때 장소명
+  "target_day": number|null,    // 삽입/수정 대상 일차
+  "want_alternatives": boolean  // "다른 곳 없어?", 재추천 요청이면 true
 }}
 
 규칙:
@@ -27,15 +32,21 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - "N일차만", "둘째 날만", "day 2 only"처럼 특정 일차만 바꾸면 rewrite_day에 그 번호를 넣으세요
 - "아무곳이나", "어디든", "아무 데나 골라"처럼 목적지가 열려 있으면 한국 내 도시/권역 하나를 골라 destination에 넣으세요 (예: 부산, 제주, 강릉). 부산+제주처럼 멀리 떨어진 복수 목적지는 넣지 마세요
 - destination은 단일 도시 또는 인접 권역 하나만 (예: "경주", "부산", "제주")
-- intent: "OO하기 좋은 도시 리스트", "누구와 가기 좋은 도시만 뽑아줘"처럼 일정(코스)이 아니라 도시 목록을 원하면 "city_list". 그 외 일정/코스 요청은 "itinerary"
-- intent: 새 일정을 만들거나 바꿀 필요 없이 가부/확인/일반 대화만 원하면 "qa". 예: "위 일정에서 눈썰매도 가능해?", "이 일정에 미술관 포함돼 있어?", "거기 겨울에도 갈 수 있어?", "예산 안에 가능할까?", "이 일정 무리일까?", "차 없이도 돼?", "고마워". 특히 기존 일정을 그대로 두고 "~가 가능한지/포함되는지/괜찮은지"만 물으면 "qa"입니다(가능/불가능/알 수 없음으로 답할 수 있는 질문)
-- 단, "일정 짜줄 수 있어?", "코스 추천 가능해?", "3일치 만들어줘", "미술관 추가해줘", "2일차 바꿔줘"처럼 실제로 일정을 새로 만들거나 변경해달라는 요청이면 qa가 아니라 "itinerary"입니다
-- 특정 일차 재작성(rewrite_day가 있음)은 qa가 아니라 "itinerary"입니다
-- intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null로 두세요 (여러 도시를 비교해야 하므로)
-- "서울 말고", "부산 빼고", "제주 제외한 다른 곳"처럼 특정 도시를 빼달라고 하면 그 도시들을 exclude_cities에 넣고, 그 도시는 destination으로 넣지 마세요. "서울 말고 다른 도시"의 destination은 null입니다
-- exclude_cities에 넣은 도시는 절대 destination이나 추천에 포함하지 마세요
-- "5개 일정 추천", "3군데 추천해줘", "당일치기 일정 5개", "코스 3가지"처럼 서로 다른 일정(코스)을 여러 개 원하면 그 개수를 itinerary_count에 넣으세요. 일정 개수 언급이 없으면 null입니다. "5개의 장소/맛집"처럼 한 일정 안의 방문지 개수를 뜻하면 itinerary_count가 아니라 null입니다
-- "당일치기", "당일 여행", "day trip"이면 days=1로 설정하세요
+- intent "meta": "이게 뭐야", "누구야", "자기소개", "뭐하는 모델/서비스", "LENA가 뭐야"처럼 제품/봇 소개만 물으면 "meta"
+- intent "place_list": "여행가기 좋은 곳 추천", "어디 갈까", "여행지 추천", "장소 추천"처럼 일정(코스)이 아니라 장소/여행지만 원할 때. 일정·N박·N일·코스 짜달라는 말이 있으면 place_list가 아님
+- intent "city_list": "OO하기 좋은 도시 리스트", "누구와 가기 좋은 도시만 뽑아줘"처럼 도시 목록. 그 외 일정/코스는 "itinerary"
+- intent "edit": 기존 일정이 있고 "XX을 3일차에 넣어줘", "YY 빼줘", "ZZ를 바꿔줘"처럼 부분 수정. rewrite_day만 있으면 itinerary
+- intent "qa": 새 일정을 만들거나 바꿀 필요 없이 가부/확인/일반 대화. 예: "위 일정에서 눈썰매도 가능해?", "고마워"
+- 단, "일정 짜줄 수 있어?", "3일치 만들어줘", "미술관 추가해줘"처럼 일정을 만들거나 변경하면 qa가 아님
+- 특정 일차 재작성(rewrite_day)은 qa가 아니라 "itinerary"
+- intent가 city_list면 destination은 사용자가 특정 지역을 콕 집었을 때만 넣고, 아니면 null
+- "서울 말고", "부산 빼고"처럼 도시 제외면 exclude_cities. "경복궁 싫어", "XX 빼고"처럼 장소 제외면 exclude_places
+- exclude_places의 장소는 절대 추천/일정에 넣지 마세요
+- "5개 일정 추천", "코스 3가지"처럼 서로 다른 일정을 여러 개면 itinerary_count. "5개의 장소"는 null
+- "당일치기", "day trip"이면 days=1
+- "다른 곳 없어?", "다른 데", "재추천", "다른 장소"면 want_alternatives=true
+- "8월 20일부터", "2026-08-20", "다음 주 월요일부터"처럼 시작일이 있으면 start_date를 YYYY-MM-DD로 (추정 가능하면)
+- "~을 3일차에 넣어/추가"면 insert_place + target_day, intent="edit"
 
 이전 대화:
 {history}
@@ -45,16 +56,23 @@ TRAVEL_EXTRACT_PROMPT = ChatPromptTemplate.from_template("""
 - days: {session_days}
 - budget: {session_budget}
 - preferences: {session_preferences}
+- start_date: {session_start_date}
 
 질문: {question}
 """)
 
 TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 당신은 한국 여행 일정 플래너입니다.
-아래 후보 장소/코스, 이전 대화, 그리고 '실시간 참고 정보'만 근거로 답하세요.
+아래 후보 장소/코스, 이전 대화, 이전 일정(JSON), 그리고 '실시간 참고 정보'만 근거로 답하세요.
 후보 데이터와 '실시간 참고 정보'에 없는 운영시간, 입장료, 메뉴, 실시간 가격을 지어내지 마세요.
 과거 패키지 가격은 참고값이며 예약 가능 여부가 아닙니다.
-이전 일정을 수정·보완하는 질문이면 이전 답변을 기억하고 변경점만 반영하세요.
+이전 일정을 수정·보완하는 질문이면 이전 일정을 유지한 채 변경점만 반영하세요.
+
+제외·중복 규칙(필수):
+- 아래 '제외 장소' 목록에 있는 장소는 절대 일정에 넣지 마세요.
+- 같은 장소를 서로 다른 시간대/일차에 두 번 이상 넣지 마세요.
+- 이전 답변에서 이미 추천했던 장소를 재추천하지 마세요. 새 장소로 대체하세요.
+- 후보가 부족하면 warnings에 적고 가능한 범위만 제안하세요. 이전과 동일한 일정을 그대로 다시 내지 마세요.
 
 실시간 반영 규칙(필수):
 - 아래 '실시간 참고 정보'가 있으면 반드시 일정에 반영하세요.
@@ -62,6 +80,7 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 - '오늘 휴무 추정'에 있는 장소는 그 날 배치하지 말고 다른 날이나 다른 장소로 바꾸세요.
 - 실시간 정보가 "(제공 가능한 실시간 정보 없음)"이면 무시하고 일반 일정을 만드세요.
 - 날씨를 반영해 조정한 경우 그 이유를 note나 answer에 짧게 적으세요.
+- 날씨 Day N의 날짜는 여행 N일차와 같습니다 (여행 시작일 기준).
 
 동선 규칙(필수):
 - 전체 일정은 지리적으로 가까운 도시/권역만 사용하세요. 부산-제주, 서울-부산, 강릉-여수처럼 장거리·항공이 필요한 조합은 금지입니다.
@@ -84,10 +103,16 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 이전 대화:
 {history}
 
+이전 일정(JSON, 없으면 "[]"):
+{previous_itinerary}
+
+제외 장소: {exclude_places}
+
 사용자 요구:
 - 질문: {question}
 - 목적지: {destination}
 - 일수: {days}
+- 시작일: {start_date}
 - 예산: {budget}
 - 선호: {preferences}
 
@@ -124,18 +149,14 @@ TRAVEL_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 
 answer 작성 형식(필수):
 - answer는 사용자가 바로 읽을 수 있는 깔끔한 일정 요약이어야 합니다.
-- 일정(day)별로 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\n\n)로 구분하세요.
+- 일정(day)별로 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\\n\n)로 구분하세요.
 - 각 문단은 "Day 1 · 테마" 같은 제목 줄로 시작하고, 그 아래 장소를 불릿(-)으로 한 줄씩 적으세요.
 - 같은 문단(하루) 안에서 줄바꿈은 \n 하나, 다른 날로 넘어갈 때는 \n\n 두 개를 쓰세요.
-- 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대(오전/오후/저녁)를 앞에 붙이세요.
+- 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대를 앞에 붙이세요.
 - 일정(day) 문단들 뒤에는 빈 줄(\n\n)을 두고 "숙소 추천" 제목 줄로 시작하는 문단을 따로 넣으세요.
-- 숙소는 일정처럼 오전/오후/저녁 시간대로 나누지 마세요. "1. 숙소명 — 지역/이유"처럼 1. 2. 3. 번호를 매긴 리스트로만 적으세요.
-- 숙소는 일정 문단 안에 섞지 말고 이 문단에만 적으세요. 후보 숙소가 없으면 이 문단은 생략하세요.
+- 숙소는 "1. 숙소명 — 지역/이유" 번호 리스트로만 적으세요.
 - 마지막에는 빈 줄(\n\n)을 하나 두고 "팁: ..." 한 줄을 덧붙이세요.
 - 후보가 부족하면 warnings에 명시하고 가능한 범위만 제안하세요.
-
-answer 예시(형식만 참고):
-"Day 1 · 도심 관광\n- 오전: OO공원 — 산책하기 좋음\n- 오후: OO박물관 — 실내 관람\n- 저녁: OO거리 — 야경\n\nDay 2 · 자연 여행\n- 오전: OO해변 — 바다 감상\n- 오후: OO전망대 — 사진 명소\n\n숙소 추천\n1. OO호텔 — 도심 접근성이 좋아 이동이 편해요\n2. OO게스트하우스 — 가성비가 좋아요\n\n팁: 이동 동선을 고려해 오전엔 실내를 추천해요."
 """)
 
 TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
@@ -144,16 +165,20 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
 다른 일차는 출력하지 마세요. 후보 장소/코스, 이전 대화, '실시간 참고 정보'만 근거로 답하세요.
 후보 데이터와 '실시간 참고 정보'에 없는 운영시간, 입장료, 메뉴, 실시간 가격을 지어내지 마세요.
 
+제외·중복 규칙(필수):
+- 아래 '제외 장소'와 '이미 사용된 장소'는 절대 넣지 마세요. 반드시 다른 장소로 바꾸세요.
+- 후보가 부족하면 가능한 만큼만 짜고 warnings에 "대체 장소가 부족해요"라고 적으세요.
+
 실시간 반영 규칙(필수):
 - 아래 '실시간 참고 정보'가 있으면 반드시 반영하세요. 비 예보인 날은 실내 위주로, '오늘 휴무 추정' 장소는 배치하지 마세요.
 - 실시간 정보가 "(제공 가능한 실시간 정보 없음)"이면 무시하세요.
 
 동선 규칙(필수):
-- 재작성하는 일차의 morning/afternoon/evening은 같은 도시(또는 바로 인접 생활권)만 사용하세요. 하루 안에 다른 도시로 이동하지 마세요.
-- 기존 일정·목적지({destination})와 지리적으로 가까운 권역을 유지하세요. 부산-제주처럼 먼 도시로 바꾸지 마세요.
+- 재작성하는 일차의 morning/afternoon/evening은 같은 도시(또는 바로 인접 생활권)만 사용하세요.
+- 기존 일정·목적지({destination})와 지리적으로 가까운 권역을 유지하세요.
 
 숙소 규칙(필수):
-- 숙소(숙박/호텔/게스트하우스/펜션/리조트/모텔 등)는 slots에 절대 넣지 마세요. 슬롯에는 관광지·문화시설·음식점·체험 등만 배치하세요.
+- 숙소는 slots에 절대 넣지 마세요.
 
 응답 언어: {language}
 
@@ -162,6 +187,9 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
 
 현재 전체 일정(JSON):
 {previous_itinerary}
+
+제외 장소: {exclude_places}
+이미 사용된 장소: {used_places}
 
 사용자 요구:
 - 질문: {question}
@@ -188,15 +216,71 @@ TRAVEL_REWRITE_DAY_PROMPT = ChatPromptTemplate.from_template("""
       {{"time": "morning|afternoon|evening", "place_name": string, "poi_id": string|null, "note": string}}
     ]
   }},
+  "day_options": [
+    {{
+      "theme": string,
+      "slots": [
+        {{"time": "morning|afternoon|evening", "place_name": string, "poi_id": string|null, "note": string}}
+      ]
+    }}
+  ],
   "warnings": string[],
   "answer": string
 }}
 
-answer 작성 형식(필수):
-- answer에는 {rewrite_day}일차 변경 요약만 넣으세요.
-- "Day {rewrite_day} · 테마" 제목 줄로 시작하고, 그 아래 장소를 불릿(-)으로 한 줄씩(\n) 적으세요.
-- 각 불릿은 "- 오전: 장소명 — 짧은 설명" 형식으로 시간대를 앞에 붙이세요.
-- 마지막에는 빈 줄(\n\n)을 하나 두고 "팁: ..." 한 줄을 덧붙이세요.
+- day_options에는 서로 다른 대안을 최대 3개까지. 후보가 부족하면 1개만.
+- answer에는 {rewrite_day}일차 변경 요약만. "Day {rewrite_day} · 테마" + 불릿. 마지막에 팁 한 줄.
+""")
+
+TRAVEL_EDIT_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 일정 편집기입니다.
+기존 일정을 유지한 채 사용자 요청만 반영하세요. 일정을 처음부터 새로 만들지 마세요.
+
+규칙(필수):
+- 아래 '이전 일정'을 바탕으로 요청된 삽입/삭제/교체만 적용한 전체 itinerary를 출력하세요.
+- 제외 장소는 절대 넣지 마세요.
+- 장소를 특정 일차에 넣으라고 하면 그 일차 슬롯(비어 있으면 morning→afternoon→evening 순)에 넣고, 필요하면 기존 슬롯과 교체하세요.
+- 장소를 빼달라고 하면 해당 슬롯을 제거하고, 가능하면 남은 후보로 채우세요.
+- 같은 장소를 중복 배치하지 마세요.
+- 후보에 없는 장소는 지어내지 마세요. 없으면 warnings에 적으세요.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+이전 일정(JSON):
+{previous_itinerary}
+
+제외 장소: {exclude_places}
+삽입할 장소: {insert_place}
+대상 일차: {target_day}
+
+사용자 요구:
+- 질문: {question}
+- 목적지: {destination}
+- 일수: {days}
+- 선호: {preferences}
+
+후보 장소(JSON):
+{places}
+
+다음 JSON만 출력하세요:
+{{
+  "itinerary": [
+    {{
+      "day": 1,
+      "theme": string,
+      "slots": [
+        {{"time": "morning|afternoon|evening", "place_name": string, "poi_id": string|null, "note": string}}
+      ]
+    }}
+  ],
+  "warnings": string[],
+  "answer": string
+}}
+
+answer는 변경 요약 위주로, Day별로 불릿 형식.
 """)
 
 TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
@@ -240,6 +324,47 @@ TRAVEL_CITY_LIST_PROMPT = ChatPromptTemplate.from_template("""
 answer에는 사용자가 바로 읽을 수 있는 짧은 도시 리스트 요약을 넣으세요.
 """)
 
+TRAVEL_PLACE_LIST_PROMPT = ChatPromptTemplate.from_template("""
+당신은 한국 여행 장소 추천 큐레이터입니다.
+사용자는 아직 일정을 원하지 않습니다. '장소 목록'만 추천하세요. Day/오전/오후 일정은 만들지 마세요.
+
+규칙(필수):
+- 후보(candidates)에 있는 장소만 사용하세요. 없는 장소를 지어내지 마세요.
+- 제외 장소에 있는 이름은 절대 추천하지 마세요.
+- 이전에 이미 추천한 장소를 반복하지 마세요.
+- 서로 다른 장소를 5~8개 정도 고르고, 각 장소에 짧은 merit(한 문장)를 쓰세요.
+- 일정을 짜지 마세요. 장소 리스트와 다음에 할 수 있는 선택만 안내하세요.
+
+응답 언어: {language}
+
+이전 대화:
+{history}
+
+제외 장소: {exclude_places}
+
+사용자 요구:
+- 질문: {question}
+- 목적지: {destination}
+- 선호: {preferences}
+
+후보(JSON):
+{candidates}
+
+다음 JSON만 출력하세요:
+{{
+  "recommended_places": [
+    {{"place_name": string, "poi_id": string|null, "merit": string, "city": string|null}}
+  ],
+  "warnings": string[],
+  "answer": string
+}}
+
+answer 형식:
+- 장소에 번호를 매긴 짧은 목록
+- 마지막에 빈 줄 후 다음 문장 포함:
+  "원하시면 ① 이 중 한 곳으로 일정 짜기 ② 다른 장소 더 보기 ③ 조건 알려주기 중 골라 주세요."
+""")
+
 TRAVEL_QA_PROMPT = ChatPromptTemplate.from_template("""
 당신은 한국 여행 상담 어시스턴트입니다.
 사용자의 질문에 이전 대화와 현재까지의 일정 맥락을 바탕으로 간결하고 친근하게 답하세요.
@@ -264,6 +389,21 @@ TRAVEL_QA_PROMPT = ChatPromptTemplate.from_template("""
 답변:
 """)
 
+TRAVEL_META_PROMPT = ChatPromptTemplate.from_template("""
+당신은 LENA, 한국 여행 장소·일정 추천 어시스턴트입니다.
+사용자의 메타 질문(서비스 소개, 정체, 사용법)에 2~4문장으로 짧고 친절하게 답하세요.
+
+필수:
+- 일정을 만들지 마세요. 장소 검색을 언급하되 지금 검색하지 마세요.
+- 할 수 있는 일: 여행지/장소 추천, 다일 일정, 특정 날 수정, 날씨 반영 등.
+- JSON 출력 금지. 자연스러운 문장만.
+
+응답 언어: {language}
+사용자 질문: {question}
+
+답변:
+""")
+
 TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 당신은 한국 여행 일정 플래너입니다.
 사용자는 같은 지역 안에서 서로 다른 장소로 구성된 일정(코스)을 여러 개 비교하고 싶어 합니다.
@@ -278,6 +418,7 @@ TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 - 후보 장소가 부족해 서로 다른 일정을 {max_count}개까지 못 만들면, 억지로 채우지 말고 만들 수 있는 개수만 만드세요.
   이때 warnings와 answer에 "등록된 장소가 {place_count}곳뿐이라 서로 다른 일정을 N개까지만 만들 수 있었어요"처럼 정확한 이유를 적으세요.
 - 일정끼리 장소가 최대한 겹치지 않게 하세요. 어쩔 수 없이 겹치면 최소화하세요.
+- 제외 장소({exclude_places})는 사용하지 마세요.
 
 동선 규칙(필수):
 - 각 일정은 지리적으로 가까운 도시/권역만 사용하세요. 장거리·항공 조합은 금지입니다.
@@ -324,7 +465,7 @@ TRAVEL_MULTI_ITINERARY_PROMPT = ChatPromptTemplate.from_template("""
 {{
   "itineraries": [
     {{
-      "title": string,   // 일정 특징 요약 (예: "바다 힐링 코스")
+      "title": string,
       "days": [
         {{
           "day": 1,
@@ -344,6 +485,6 @@ answer 작성 형식(필수):
 - 추천 일정마다 하나의 문단으로 나누고, 문단과 문단 사이는 반드시 빈 줄(\n\n)로 구분하세요.
 - 각 문단은 "추천 1 · 제목" 같은 제목 줄로 시작하고, 그 아래 방문지를 불릿(-)으로 한 줄씩(\n) 적으세요.
 - 각 불릿은 "- 오전: 장소명 — 짧은 설명"처럼 시간대(오전/오후/저녁)를 앞에 붙이세요.
-- 숙소는 넣지 마세요. 액티비티·체험·행사가 있으면 설명에 그 성격을 짧게 드러내세요.
+- 숙소는 넣지 마세요.
 - 요청 개수보다 적게 만들었다면, 마지막 빈 줄(\n\n) 뒤에 그 이유를 한 줄로 정확히 설명하세요.
 """)

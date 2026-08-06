@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 from src.config import TRAVEL_DB_PATH, TRAVEL_VECTORSTORE_PATH
 from src.travel.travel_repository import TravelRepository
@@ -169,7 +170,49 @@ class TravelSearchService:
         return merged
 
     def get_place_details(self, poi_id: str) -> dict[str, Any] | None:
-        return self.repo.get_place(poi_id)
+        place = self.repo.get_place(poi_id)
+        if not place:
+            return None
+        homepage = (place.get("homepage") or "").strip()
+        if not homepage:
+            # TourAPI detailCommon homepage 보강 시도
+            try:
+                from src.travel.tour_api import kor_service
+
+                common = kor_service.detail_common(str(poi_id))
+                if isinstance(common, dict):
+                    for key in ("homepage", "hmpg", "hmpgurl"):
+                        val = str(common.get(key) or "").strip()
+                        if val.startswith("http"):
+                            homepage = val
+                            place["homepage"] = homepage
+                            break
+                    # HTML anchor sometimes nested
+                    if not homepage:
+                        raw = str(common.get("homepage") or "")
+                        if "http" in raw:
+                            import re as _re
+
+                            m = _re.search(r"https?://[^\s\"'<>]+", raw)
+                            if m:
+                                place["homepage"] = m.group(0)
+                                homepage = m.group(0)
+            except Exception:
+                pass
+        name = place.get("name_ko") or place.get("name_en") or ""
+        region = " ".join(
+            x for x in (place.get("region"), place.get("city")) if x
+        )
+        query = f"{name} {region}".strip()
+        place["search_url"] = (
+            f"https://search.naver.com/search.naver?query={_url_quote(query)}"
+            if query
+            else None
+        )
+        place["has_homepage"] = bool(
+            homepage and str(homepage).startswith("http")
+        )
+        return place
 
 
 def _merge_by_key(

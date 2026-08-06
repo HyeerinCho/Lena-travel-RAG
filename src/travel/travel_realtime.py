@@ -99,7 +99,6 @@ def _latlon_for_city(city: str | None) -> tuple[float, float] | None:
     city = str(city).strip()
     if city in CITY_LATLON:
         return CITY_LATLON[city]
-    # 부분 일치(예: "제주특별자치도", "제주시")
     for name, coords in CITY_LATLON.items():
         if name in city or city in name:
             return coords
@@ -113,20 +112,60 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _parse_date(value: str | None, *, now: datetime) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=KST)
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_start_date(
+    start_date: str | None,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Return KST midnight of trip start. Defaults to today."""
+    now = now or datetime.now(KST)
+    parsed = _parse_date(start_date, now=now)
+    if parsed is not None:
+        return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 def fetch_weather(
     city: str | None,
     days: int | None = None,
     *,
+    start_date: str | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """도시별 일자 요약 예보 리스트를 반환. 실패 시 빈 리스트."""
+    """도시별 일자 요약 예보 리스트. start_date 기준으로 Day1..N 정렬. 실패 시 []."""
     coords = _latlon_for_city(city)
     if coords is None:
         return []
 
-    # 여행 기간이 지정되면 그 일수만큼, 지정되지 않으면 오늘부터 1주일(WEATHER_DEFAULT_DAYS)만.
-    horizon = min(days or WEATHER_DEFAULT_DAYS, WEATHER_FORECAST_MAX_DAYS)
-    horizon = max(1, horizon)
+    now = now or datetime.now(KST)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    trip_start = resolve_start_date(start_date, now=now)
+    horizon = max(1, min(days or WEATHER_DEFAULT_DAYS, WEATHER_FORECAST_MAX_DAYS))
+
+    # Open-Meteo forecast is relative to today; need enough days to cover trip end.
+    days_until_start = (trip_start.date() - today.date()).days
+    if days_until_start < 0:
+        # Past start date → treat as starting today and still return trip-relative days.
+        trip_start = today
+        days_until_start = 0
+
+    end_offset = days_until_start + horizon
+    if days_until_start >= WEATHER_FORECAST_MAX_DAYS:
+        return []
+    forecast_days = min(WEATHER_FORECAST_MAX_DAYS, max(1, end_offset))
+
     params = {
         "latitude": f"{coords[0]:.4f}",
         "longitude": f"{coords[1]:.4f}",
@@ -135,7 +174,7 @@ def fetch_weather(
             "precipitation_probability_max"
         ),
         "timezone": "Asia/Seoul",
-        "forecast_days": str(horizon),
+        "forecast_days": str(forecast_days),
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
     try:
@@ -153,19 +192,44 @@ def fetch_weather(
     tmin = daily.get("temperature_2m_min") or []
     pops = daily.get("precipitation_probability_max") or []
 
+    by_date: dict[str, int] = {str(d): i for i, d in enumerate(times)}
+
     def _at(seq: list[Any], i: int) -> Any:
         return seq[i] if i < len(seq) else None
 
     out: list[dict[str, Any]] = []
-    for i, date_str in enumerate(times[:horizon]):
+    for day_index in range(1, horizon + 1):
+        target = trip_start + timedelta(days=day_index - 1)
+        date_str = target.strftime("%Y-%m-%d")
+        api_i = by_date.get(date_str)
+        if api_i is None:
+            # Outside forecast window: still emit a shell so Day N maps correctly.
+            try:
+                weekday = _WEEKDAY_KO[target.weekday()]
+            except Exception:
+                weekday = ""
+            out.append(
+                {
+                    "day": day_index,
+                    "date": date_str,
+                    "weekday": weekday,
+                    "condition": "예보 없음",
+                    "temp_min": None,
+                    "temp_max": None,
+                    "pop": None,
+                    "rain": False,
+                    "summary": "예보 범위 밖",
+                }
+            )
+            continue
         out.append(
             _summarize_day(
-                i + 1,
+                day_index,
                 date_str,
-                _at(codes, i),
-                _at(tmax, i),
-                _at(tmin, i),
-                _at(pops, i),
+                _at(codes, api_i),
+                _at(tmax, api_i),
+                _at(tmin, api_i),
+                _at(pops, api_i),
             )
         )
     return out
@@ -179,7 +243,9 @@ def _summarize_day(
     temp_min: Any,
     pop: Any,
 ) -> dict[str, Any]:
-    condition, code_rain = _WMO_CODE.get(_to_int(code) if code is not None else -1, ("정보없음", False))
+    condition, code_rain = _WMO_CODE.get(
+        _to_int(code) if code is not None else -1, ("정보없음", False)
+    )
     temp_min_i = _to_int(temp_min)
     temp_max_i = _to_int(temp_max)
     pop_i = _to_int(pop)
@@ -216,10 +282,8 @@ def _closed_today(closed_ko: str | None, when: datetime) -> bool:
     if any(k in text for k in ("연중무휴", "무휴", "없음")):
         return False
     today = _WEEKDAY_KO[when.weekday()]
-    # "매주 월요일", "월요일 휴무", "월/화 휴무" 등
     if f"{today}요일" in text or f"매주 {today}" in text:
         return True
-    # "월,화" 나열 형태
     if f"{today}" in text and "요일" in text:
         return True
     return False
@@ -251,19 +315,32 @@ def build_realtime_context(
     places: list[dict[str, Any]],
     days: int | None,
     *,
+    start_date: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """프롬프트/응답에 쓸 실시간 컨텍스트(dict). text 필드는 프롬프트 주입용."""
     now = now or datetime.now(KST)
-    weather = fetch_weather(destination, days, now=now)
+    trip_days = max(1, days or WEATHER_DEFAULT_DAYS)
+    # Align weather length with itinerary days when provided.
+    weather = fetch_weather(
+        destination,
+        trip_days if days else WEATHER_DEFAULT_DAYS,
+        start_date=start_date,
+        now=now,
+    )
     closed_today = operating_notes(places, when=now)
 
     lines: list[str] = []
     if weather:
-        lines.append(f"[날씨 예보 · {destination or '여행지'}]")
+        start = resolve_start_date(start_date, now=now).strftime("%Y-%m-%d")
+        lines.append(f"[날씨 예보 · {destination or '여행지'} · 시작 {start}]")
         for w in weather:
             tail = " → 실내 위주 권장" if w.get("rain") else ""
-            lines.append(f"- Day{w['day']} {w['date']}({w['weekday']}): {w['summary']}{tail}")
+            lines.append(
+                f"- Day{w['day']} {w['date']}({w['weekday']}): {w['summary']}{tail}"
+            )
+        if any(w.get("condition") == "예보 없음" for w in weather):
+            lines.append("- 일부 날짜는 Open-Meteo 예보 범위(최대 16일) 밖입니다.")
     if closed_today:
         lines.append(f"[오늘({_WEEKDAY_KO[now.weekday()]}) 휴무 추정]")
         for c in closed_today:
@@ -272,6 +349,7 @@ def build_realtime_context(
     text = "\n".join(lines) if lines else "(제공 가능한 실시간 정보 없음)"
     return {
         "generated_at": now.strftime("%Y-%m-%d %H:%M KST"),
+        "start_date": resolve_start_date(start_date, now=now).strftime("%Y-%m-%d"),
         "weather": weather,
         "closed_today": closed_today,
         "text": f"제공 시각: {now.strftime('%Y-%m-%d %H:%M KST')}\n{text}",

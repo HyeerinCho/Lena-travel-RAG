@@ -28,6 +28,11 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row["name"] for row in rows}
+
+
 def init_session_db(db_path: Path | None = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(
@@ -58,17 +63,34 @@ def init_session_db(db_path: Path | None = None) -> None:
                 ON messages(session_id, created_at);
             """
         )
+        cols = _table_columns(conn, "sessions")
+        migrations = [
+            ("owner_id", "TEXT"),
+            ("start_date", "TEXT"),
+            ("excluded_places", "TEXT"),
+            ("shown_poi_ids", "TEXT"),
+            ("shown_place_names", "TEXT"),
+        ]
+        for name, col_type in migrations:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {col_type}")
         conn.commit()
 
 
+def _json_list(raw: Any) -> list[Any]:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
-    prefs_raw = row["preferences"]
-    preferences: list[str] = []
-    if prefs_raw:
-        try:
-            preferences = json.loads(prefs_raw)
-        except json.JSONDecodeError:
-            preferences = []
+    keys = row.keys()
     return {
         "id": row["id"],
         "title": row["title"],
@@ -76,7 +98,18 @@ def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
         "days": row["days"],
         "budget": row["budget"],
         "language": row["language"] or "ko",
-        "preferences": preferences,
+        "preferences": _json_list(row["preferences"] if "preferences" in keys else None),
+        "owner_id": row["owner_id"] if "owner_id" in keys else None,
+        "start_date": row["start_date"] if "start_date" in keys else None,
+        "excluded_places": _json_list(
+            row["excluded_places"] if "excluded_places" in keys else None
+        ),
+        "shown_poi_ids": _json_list(
+            row["shown_poi_ids"] if "shown_poi_ids" in keys else None
+        ),
+        "shown_place_names": _json_list(
+            row["shown_place_names"] if "shown_place_names" in keys else None
+        ),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -104,7 +137,12 @@ class TravelSessionStore:
         self.db_path = db_path or SESSION_DB_PATH
         init_session_db(self.db_path)
 
-    def create_session(self, title: str | None = None) -> dict[str, Any]:
+    def create_session(
+        self,
+        title: str | None = None,
+        *,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         session_id = str(uuid.uuid4())
         now = _utcnow()
         title = (title or "").strip() or "새 여행"
@@ -113,10 +151,11 @@ class TravelSessionStore:
                 """
                 INSERT INTO sessions (
                     id, title, destination, days, budget, language, preferences,
+                    owner_id, start_date, excluded_places, shown_poi_ids, shown_place_names,
                     created_at, updated_at
-                ) VALUES (?, ?, NULL, NULL, NULL, 'ko', '[]', ?, ?)
+                ) VALUES (?, ?, NULL, NULL, NULL, 'ko', '[]', ?, NULL, '[]', '[]', '[]', ?, ?)
                 """,
-                (session_id, title, now, now),
+                (session_id, title, owner_id, now, now),
             )
             conn.commit()
             row = conn.execute(
@@ -124,8 +163,38 @@ class TravelSessionStore:
             ).fetchone()
         return _row_to_session(row)
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, owner_id: str | None = None) -> list[dict[str, Any]]:
         with _connect(self.db_path) as conn:
+            if owner_id:
+                rows = conn.execute(
+                    """
+                    SELECT s.*,
+                           (
+                             SELECT COUNT(*) FROM messages m
+                             WHERE m.session_id = s.id
+                           ) AS message_count
+                    FROM sessions s
+                    WHERE s.owner_id = ? OR s.owner_id IS NULL
+                    ORDER BY s.updated_at DESC
+                    """,
+                    (owner_id,),
+                ).fetchall()
+                # Claim unowned sessions for this client on list, but only filter to owner after.
+                filtered = []
+                for row in rows:
+                    item = _row_to_session(row)
+                    item["message_count"] = row["message_count"]
+                    if item.get("owner_id") is None:
+                        conn.execute(
+                            "UPDATE sessions SET owner_id = ? WHERE id = ? AND owner_id IS NULL",
+                            (owner_id, item["id"]),
+                        )
+                        item["owner_id"] = owner_id
+                    if item.get("owner_id") == owner_id:
+                        filtered.append(item)
+                conn.commit()
+                return filtered
+
             rows = conn.execute(
                 """
                 SELECT s.*,
@@ -151,14 +220,45 @@ class TravelSessionStore:
             ).fetchone()
         return _row_to_session(row) if row else None
 
-    def get_session_detail(self, session_id: str) -> dict[str, Any] | None:
+    def ensure_owner(self, session_id: str, owner_id: str | None) -> dict[str, Any] | None:
         session = self.get_session(session_id)
         if not session:
+            return None
+        if not owner_id:
+            return session
+        if session.get("owner_id") is None:
+            with _connect(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE sessions SET owner_id = ? WHERE id = ? AND owner_id IS NULL",
+                    (owner_id, session_id),
+                )
+                conn.commit()
+            session["owner_id"] = owner_id
+            return session
+        if session.get("owner_id") != owner_id:
+            return None
+        return session
+
+    def get_session_detail(
+        self,
+        session_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        session = self.ensure_owner(session_id, owner_id) if owner_id else self.get_session(session_id)
+        if not session:
+            return None
+        if owner_id and session.get("owner_id") and session["owner_id"] != owner_id:
             return None
         session["messages"] = self.list_messages(session_id)
         return session
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, owner_id: str | None = None) -> bool:
+        session = self.ensure_owner(session_id, owner_id) if owner_id else self.get_session(session_id)
+        if not session:
+            return False
+        if owner_id and session.get("owner_id") and session["owner_id"] != owner_id:
+            return False
         with _connect(self.db_path) as conn:
             cursor = conn.execute(
                 "DELETE FROM sessions WHERE id = ?", (session_id,)
@@ -176,9 +276,16 @@ class TravelSessionStore:
         budget: int | None = None,
         language: str | None = None,
         preferences: list[str] | None = None,
+        start_date: str | None = None,
+        excluded_places: list[str] | None = None,
+        shown_poi_ids: list[str] | None = None,
+        shown_place_names: list[str] | None = None,
+        owner_id: str | None = None,
     ) -> dict[str, Any] | None:
-        session = self.get_session(session_id)
+        session = self.ensure_owner(session_id, owner_id) if owner_id else self.get_session(session_id)
         if not session:
+            return None
+        if owner_id and session.get("owner_id") and session["owner_id"] != owner_id:
             return None
 
         new_title = title if title is not None else session["title"]
@@ -191,9 +298,24 @@ class TravelSessionStore:
         new_preferences = (
             preferences if preferences is not None else session["preferences"]
         )
+        new_start = start_date if start_date is not None else session.get("start_date")
+        new_excluded = (
+            excluded_places
+            if excluded_places is not None
+            else session.get("excluded_places") or []
+        )
+        new_shown_ids = (
+            shown_poi_ids
+            if shown_poi_ids is not None
+            else session.get("shown_poi_ids") or []
+        )
+        new_shown_names = (
+            shown_place_names
+            if shown_place_names is not None
+            else session.get("shown_place_names") or []
+        )
         now = _utcnow()
 
-        # Auto-title from first destination if still default
         if (
             title is None
             and session["title"] in {"새 여행", "New trip"}
@@ -206,7 +328,9 @@ class TravelSessionStore:
                 """
                 UPDATE sessions
                 SET title = ?, destination = ?, days = ?, budget = ?,
-                    language = ?, preferences = ?, updated_at = ?
+                    language = ?, preferences = ?, start_date = ?,
+                    excluded_places = ?, shown_poi_ids = ?, shown_place_names = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -216,6 +340,10 @@ class TravelSessionStore:
                     new_budget,
                     new_language,
                     json.dumps(new_preferences, ensure_ascii=False),
+                    new_start,
+                    json.dumps(new_excluded, ensure_ascii=False),
+                    json.dumps(new_shown_ids, ensure_ascii=False),
+                    json.dumps(new_shown_names, ensure_ascii=False),
                     now,
                     session_id,
                 ),
@@ -278,7 +406,6 @@ class TravelSessionStore:
         messages = self.list_messages(session_id)
         if not messages:
             return ""
-        # Keep the last N*2 messages (approx N turns)
         trimmed = messages[-(turn_limit * 2) :]
         lines: list[str] = []
         for msg in trimmed:

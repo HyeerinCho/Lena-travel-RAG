@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,7 @@ class TravelQueryRequest(BaseModel):
     language: str | None = Field(default=None, pattern="^(ko|en)$")
     preferences: list[str] | None = None
     rewrite_day: int | None = Field(default=None, ge=1, le=30)
+    start_date: str | None = None
 
 
 class TravelQueryResponse(BaseModel):
@@ -39,11 +40,14 @@ class TravelQueryResponse(BaseModel):
     budget: int | None = None
     preferences: list[str] = []
     language: str = "ko"
+    start_date: str | None = None
     itinerary: list[dict[str, Any]] = []
     itineraries: list[dict[str, Any]] = []
     accommodations: list[dict[str, Any]] = []
     itinerary_count: int | None = None
     cities: list[dict[str, Any]] = []
+    recommended_places: list[dict[str, Any]] = []
+    day_options: list[dict[str, Any]] = []
     intent: str = "itinerary"
     places: list[dict[str, Any]] = []
     courses: list[dict[str, Any]] = []
@@ -52,7 +56,9 @@ class TravelQueryResponse(BaseModel):
     session_id: str | None = None
     session: dict[str, Any] | None = None
     rewrite_day: int | None = None
+    exclude_places: list[str] = []
     external: dict[str, Any] = {}
+    realtime: dict[str, Any] = {}
 
 
 class CreateSessionRequest(BaseModel):
@@ -66,6 +72,7 @@ class UpdateSessionRequest(BaseModel):
     budget: int | None = Field(default=None, ge=0)
     language: str | None = Field(default=None, pattern="^(ko|en)$")
     preferences: list[str] | None = None
+    start_date: str | None = None
 
 
 class SessionSummary(BaseModel):
@@ -76,6 +83,8 @@ class SessionSummary(BaseModel):
     budget: int | None = None
     language: str = "ko"
     preferences: list[str] = []
+    start_date: str | None = None
+    owner_id: str | None = None
     created_at: str
     updated_at: str
     message_count: int = 0
@@ -92,6 +101,16 @@ class SessionMessage(BaseModel):
 
 class SessionDetail(SessionSummary):
     messages: list[SessionMessage] = []
+    excluded_places: list[str] = []
+    shown_poi_ids: list[str] = []
+    shown_place_names: list[str] = []
+
+
+def _client_id(x_client_id: str | None) -> str | None:
+    if not x_client_id:
+        return None
+    value = x_client_id.strip()
+    return value or None
 
 
 def _sse(event: str, data: Any) -> str:
@@ -141,6 +160,7 @@ def travel_query(request: TravelQueryRequest) -> TravelQueryResponse:
         language=request.language,
         preferences=request.preferences,
         rewrite_day=request.rewrite_day,
+        start_date=request.start_date,
     )
     return TravelQueryResponse(**result)
 
@@ -154,25 +174,35 @@ def get_place(poi_id: str) -> dict[str, Any]:
 
 
 @app.get("/travel/sessions", response_model=list[SessionSummary])
-def list_travel_sessions() -> list[SessionSummary]:
+def list_travel_sessions(
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+) -> list[SessionSummary]:
     store = get_session_store()
-    return [SessionSummary(**item) for item in store.list_sessions()]
+    owner = _client_id(x_client_id)
+    return [SessionSummary(**item) for item in store.list_sessions(owner_id=owner)]
 
 
 @app.post("/travel/sessions", response_model=SessionSummary)
 def create_travel_session(
     request: CreateSessionRequest = CreateSessionRequest(),
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ) -> SessionSummary:
     store = get_session_store()
-    session = store.create_session(title=request.title)
+    session = store.create_session(
+        title=request.title, owner_id=_client_id(x_client_id)
+    )
     session["message_count"] = 0
     return SessionSummary(**session)
 
 
 @app.get("/travel/sessions/{session_id}", response_model=SessionDetail)
-def get_travel_session(session_id: str) -> SessionDetail:
+def get_travel_session(
+    session_id: str,
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+) -> SessionDetail:
     store = get_session_store()
-    detail = store.get_session_detail(session_id)
+    owner = _client_id(x_client_id)
+    detail = store.get_session_detail(session_id, owner_id=owner)
     if not detail:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     detail["message_count"] = len(detail.get("messages") or [])
@@ -181,9 +211,14 @@ def get_travel_session(session_id: str) -> SessionDetail:
 
 @app.patch("/travel/sessions/{session_id}", response_model=SessionSummary)
 def update_travel_session(
-    session_id: str, request: UpdateSessionRequest
+    session_id: str,
+    request: UpdateSessionRequest,
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ) -> SessionSummary:
     store = get_session_store()
+    owner = _client_id(x_client_id)
+    if owner and not store.ensure_owner(session_id, owner):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     updated = store.update_session_meta(
         session_id,
         title=request.title,
@@ -192,18 +227,23 @@ def update_travel_session(
         budget=request.budget,
         language=request.language,
         preferences=request.preferences,
+        start_date=request.start_date,
+        owner_id=owner,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-    detail = store.get_session_detail(session_id) or {}
+    detail = store.get_session_detail(session_id, owner_id=owner) or {}
     updated["message_count"] = len(detail.get("messages") or [])
     return SessionSummary(**updated)
 
 
 @app.delete("/travel/sessions/{session_id}")
-def delete_travel_session(session_id: str) -> dict[str, Any]:
+def delete_travel_session(
+    session_id: str,
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+) -> dict[str, Any]:
     store = get_session_store()
-    deleted = store.delete_session(session_id)
+    deleted = store.delete_session(session_id, owner_id=_client_id(x_client_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     return {"ok": True, "session_id": session_id}
@@ -211,8 +251,14 @@ def delete_travel_session(session_id: str) -> dict[str, Any]:
 
 @app.post("/travel/sessions/{session_id}/query", response_model=TravelQueryResponse)
 def travel_session_query(
-    session_id: str, request: TravelQueryRequest
+    session_id: str,
+    request: TravelQueryRequest,
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ) -> TravelQueryResponse:
+    store = get_session_store()
+    owner = _client_id(x_client_id)
+    if owner and not store.ensure_owner(session_id, owner):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     try:
         result = ask_travel_in_session(
             session_id,
@@ -223,6 +269,7 @@ def travel_session_query(
             language=request.language,
             preferences=request.preferences,
             rewrite_day=request.rewrite_day,
+            start_date=request.start_date,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.") from None
@@ -231,10 +278,14 @@ def travel_session_query(
 
 @app.post("/travel/sessions/{session_id}/query/stream")
 def travel_session_query_stream(
-    session_id: str, request: TravelQueryRequest
+    session_id: str,
+    request: TravelQueryRequest,
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ) -> StreamingResponse:
     store = get_session_store()
-    if not store.get_session(session_id):
+    owner = _client_id(x_client_id)
+    session = store.ensure_owner(session_id, owner) if owner else store.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
 
     def event_gen() -> Iterator[str]:
@@ -248,6 +299,7 @@ def travel_session_query_stream(
                 language=request.language,
                 preferences=request.preferences,
                 rewrite_day=request.rewrite_day,
+                start_date=request.start_date,
             ):
                 yield _sse(event_type, payload)
         except Exception as exc:
