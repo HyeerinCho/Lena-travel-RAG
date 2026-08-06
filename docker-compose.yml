@@ -7,7 +7,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data/travel:/app/data/travel:ro
+      - ./data/travel:/app/data/travel
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')\" || exit 1"]
