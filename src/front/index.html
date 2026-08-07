@@ -78,11 +78,35 @@
         gap: 10px;
       }
 
+      .sidebar-top-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
       .sidebar-label {
         font-size: 0.78rem;
         color: var(--muted);
         letter-spacing: 0.04em;
         text-transform: uppercase;
+      }
+
+      .sidebar-toggle {
+        display: none;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 4px 6px;
+        border-radius: 8px;
+        font-size: 1rem;
+        line-height: 1;
+        transition: transform 0.2s ease;
+      }
+
+      .sidebar-toggle:hover {
+        background: rgba(255, 255, 255, 0.6);
       }
 
       .new-session {
@@ -1162,6 +1186,25 @@
           max-height: 220px;
           border-right: none;
           border-bottom: 1px solid var(--line);
+          transition: max-height 0.25s ease;
+        }
+
+        .sidebar-toggle {
+          display: inline-flex;
+        }
+
+        .sidebar.collapsed {
+          max-height: 56px;
+          overflow: hidden;
+        }
+
+        .sidebar.collapsed .sidebar-toggle {
+          transform: rotate(-90deg);
+        }
+
+        .sidebar.collapsed .session-list,
+        .sidebar.collapsed .new-session {
+          display: none;
         }
 
         .app {
@@ -1181,9 +1224,21 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <div class="sidebar-top">
-          <div class="sidebar-label">여행 세션</div>
+          <div class="sidebar-top-row">
+            <div class="sidebar-label">여행 세션</div>
+            <button
+              type="button"
+              class="sidebar-toggle"
+              id="sidebarToggle"
+              aria-expanded="true"
+              aria-controls="sessionList"
+              aria-label="세션 목록 접기/펼치기"
+            >
+              ▾
+            </button>
+          </div>
           <button type="button" class="new-session" id="newSession">새 여행 시작</button>
         </div>
         <div class="session-list" id="sessionList"></div>
@@ -1253,6 +1308,8 @@
       const send = document.getElementById("send");
       const sessionList = document.getElementById("sessionList");
       const newSessionBtn = document.getElementById("newSession");
+      const sidebar = document.getElementById("sidebar");
+      const sidebarToggle = document.getElementById("sidebarToggle");
       const subtitle = document.getElementById("subtitle");
       const toggleMeta = document.getElementById("toggleMeta");
       const metaEditor = document.getElementById("metaEditor");
@@ -1262,6 +1319,20 @@
       const closeDrawer = document.getElementById("closeDrawer");
       const placeTitle = document.getElementById("placeTitle");
       const placeBody = document.getElementById("placeBody");
+
+      const isMobileViewport = () => window.matchMedia("(max-width: 840px)").matches;
+
+      function setSidebarCollapsed(collapsed) {
+        sidebar.classList.toggle("collapsed", collapsed);
+        sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      }
+
+      if (sidebarToggle) {
+        setSidebarCollapsed(isMobileViewport());
+        sidebarToggle.addEventListener("click", () => {
+          setSidebarCollapsed(!sidebar.classList.contains("collapsed"));
+        });
+      }
 
       function getClientId() {
         let id = localStorage.getItem("lenaClientId");
@@ -2400,7 +2471,10 @@
           `;
           main.querySelector(".session-title").textContent = session.title;
           main.querySelector(".session-meta").textContent = formatMeta(session);
-          main.addEventListener("click", () => selectSession(session.id));
+          main.addEventListener("click", () => {
+            selectSession(session.id);
+            if (isMobileViewport()) setSidebarCollapsed(true);
+          });
 
           const del = document.createElement("button");
           del.type = "button";
@@ -2810,7 +2884,10 @@
         }
       }
 
-      newSessionBtn.addEventListener("click", createSession);
+      newSessionBtn.addEventListener("click", () => {
+        createSession();
+        if (isMobileViewport()) setSidebarCollapsed(true);
+      });
 
       chat.addEventListener("click", (event) => {
         const chip = event.target.closest(".example-chip");

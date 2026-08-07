@@ -178,14 +178,18 @@ _WEEKDAY_NAME_TO_INDEX = {
 
 def _heuristic_start_date(query: str, *, now: datetime | None = None) -> str | None:
     now = now or datetime.now(KST)
-    m = re.search(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", query)
-    if m:
+    # "8월 5일 말고 8월 10일부터"처럼 정정 문장은 날짜가 두 번 나오고 뒤의 것이
+    # 실제로 원하는 날짜이므로, 마지막 매치를 사용한다.
+    matches = list(re.finditer(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", query))
+    if matches:
+        m = matches[-1]
         try:
             return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime("%Y-%m-%d")
         except ValueError:
             pass
-    m = re.search(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", query)
-    if m:
+    matches = list(re.finditer(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", query))
+    if matches:
+        m = matches[-1]
         month, day = int(m.group(1)), int(m.group(2))
         year = now.year
         try:
@@ -380,6 +384,21 @@ _QA_HINTS = (
     "설명해", "어떻게 해",
 )
 
+# 일정 재작성 없이 실시간 정보(날씨/예보)만 물어보는 질문. qa로 라우팅해
+# 실제 예보 데이터를 답으로 주기 위한 힌트 (기존 _QA_HINTS는 가부/확인형 질문 위주라 놓침).
+_WEATHER_HINTS = (
+    "날씨", "일기예보", "예보", "기온", "강수", "비와", "비 와", "비올까",
+    "비 올까", "눈 올까", "눈올까", "우산", "맑을까", "흐릴까", "덥나요",
+    "춥나요", "더울까", "추울까",
+)
+
+
+def _detect_weather_qa_intent(query: str) -> bool:
+    q = query or ""
+    if any(h in q for h in _ITINERARY_REQUEST_HINTS):
+        return False
+    return any(h in q for h in _WEATHER_HINTS)
+
 
 def _detect_qa_intent(query: str) -> bool:
     q = query or ""
@@ -389,7 +408,7 @@ def _detect_qa_intent(query: str) -> bool:
         return False
     if any(h in q for h in _ITINERARY_REQUEST_HINTS):
         return False
-    return any(h in q for h in _QA_HINTS)
+    return any(h in q for h in _QA_HINTS) or _detect_weather_qa_intent(q)
 
 
 def _resolve_intent(
@@ -1313,7 +1332,9 @@ def _run_extract(state: TravelState, llm: ChatGoogleGenerativeAI) -> TravelState
         "place_types", "rewrite_day", "start_date", "insert_place", "target_day",
     ):
         if parsed.get(key) not in (None, [], ""):
-            if state.get(key) in (None, [], "") or key in ("insert_place", "target_day", "rewrite_day"):
+            if state.get(key) in (None, [], "") or key in (
+                "insert_place", "target_day", "rewrite_day", "start_date",
+            ):
                 merged[key] = parsed[key]
 
     for key in ("destination", "days", "budget", "language", "start_date"):
@@ -1330,8 +1351,15 @@ def _run_extract(state: TravelState, llm: ChatGoogleGenerativeAI) -> TravelState
         merged["insert_place"] = _heuristic_insert_place(state["query"])
     if merged.get("target_day") is None:
         merged["target_day"] = _heuristic_target_day(state["query"])
-    if not merged.get("start_date"):
-        merged["start_date"] = _heuristic_start_date(state["query"])
+    # 이번 턴에 LLM이 날짜를 못 뽑았어도, 메시지에 명시적 날짜가 있으면
+    # 세션에 이미 start_date가 있어도 정정으로 간주하고 갱신한다.
+    # (LLM이 정정을 놓친 경우 대비 — LLM이 이미 뽑았으면 그 값을 우선한다.)
+    if parsed.get("start_date") in (None, [], ""):
+        _query_start_date = _heuristic_start_date(state["query"])
+        if _query_start_date:
+            merged["start_date"] = _query_start_date
+        elif not merged.get("start_date"):
+            merged["start_date"] = _query_start_date
 
     count = _first_valid_count(parsed.get("itinerary_count"), base.get("itinerary_count"))
     merged["itinerary_count"] = count
@@ -1580,6 +1608,23 @@ def build_travel_graph(search: TravelSearchService):
     return graph.compile()
 
 
+def _qa_realtime_text(state: "TravelState", previous: list[dict[str, Any]] | None) -> str:
+    """qa 의도(날씨 등 질문)에 답할 때 근거로 줄 실시간 정보 텍스트."""
+    if not state.get("destination"):
+        return "(없음)"
+    days = state.get("days") or (len(previous) if previous else None) or 1
+    try:
+        realtime = build_realtime_context(
+            state.get("destination"),
+            state.get("places") or [],
+            days,
+            start_date=state.get("start_date"),
+        )
+    except Exception:
+        return "(없음)"
+    return realtime.get("text") or "(없음)"
+
+
 def _build_response(
     state: TravelState,
     llm: ChatGoogleGenerativeAI,
@@ -1620,6 +1665,7 @@ def _build_response(
                     "previous_itinerary": (
                         json.dumps(previous, ensure_ascii=False) if previous else "(없음)"
                     ),
+                    "realtime_info": _qa_realtime_text(state, previous),
                 }
             )
             answer = _llm_content(raw).strip()
@@ -2070,6 +2116,7 @@ def stream_build_itinerary_tokens(
             "previous_itinerary": (
                 json.dumps(prev, ensure_ascii=False) if prev else "(없음)"
             ),
+            "realtime_info": _qa_realtime_text(result_so_far, prev),
         }
         accumulated = ""
         try:

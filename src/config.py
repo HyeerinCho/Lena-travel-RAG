@@ -22,11 +22,16 @@ LLM_MODEL = "gemini-2.5-flash"
 # Real-time weather via Open-Meteo (무료, API 키 불필요). https://open-meteo.com
 # 위/경도만으로 조회하며, 네트워크 실패 시 날씨 없이 동작합니다.
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+# 예보 범위(16일) 밖 날짜의 참고용 과거 평균 기후 조회용 (무료, API 키 불필요)
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 # Open-Meteo는 최대 16일까지 일별 예보 제공
 WEATHER_FORECAST_MAX_DAYS = 16
 # 여행 기간이 지정되지 않았을 때 보여줄 기본 예보 일수(오늘부터 1주일)
 WEATHER_DEFAULT_DAYS = 7
 WEATHER_REQUEST_TIMEOUT_SEC = 6
+# 과거 평균 기후 계산 시 참고할 연도 수 / 대상일 앞뒤 조회 창(일)
+CLIMATE_AVG_YEARS = 2
+CLIMATE_AVG_WINDOW_DAYS = 3
 
 # 한국관광공사 공공데이터(data.go.kr B551011) 통합 설정.
 # 아래 5개 서비스가 동일 계정 인증키를 공유합니다.

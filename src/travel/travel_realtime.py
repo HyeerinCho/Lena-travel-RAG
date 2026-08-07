@@ -9,10 +9,14 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.config import (
+    CLIMATE_AVG_WINDOW_DAYS,
+    CLIMATE_AVG_YEARS,
+    OPEN_METEO_ARCHIVE_URL,
     OPEN_METEO_URL,
     WEATHER_DEFAULT_DAYS,
     WEATHER_FORECAST_MAX_DAYS,
@@ -137,6 +141,85 @@ def resolve_start_date(
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _fetch_climate_normal(
+    coords: tuple[float, float],
+    target: datetime,
+    *,
+    years: int = CLIMATE_AVG_YEARS,
+    window_days: int = CLIMATE_AVG_WINDOW_DAYS,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """예보 범위 밖 날짜용 참고치: 최근 N년간 같은 날짜(±window) 평균 기온/날씨.
+
+    Open-Meteo Historical Weather API(과거 실측치)를 연도별로 조회해 평균낸다.
+    실패하거나 데이터가 없으면 None (호출부에서 '예보 없음'으로 대체).
+    """
+    now = now or datetime.now(KST)
+    tmax_values: list[float] = []
+    tmin_values: list[float] = []
+    codes: list[int] = []
+    used_years: list[int] = []
+
+    for back in range(1, years + 1):
+        year = target.year - back
+        try:
+            center = target.replace(year=year)
+        except ValueError:
+            continue  # 2/29처럼 해당 연도에 없는 날짜
+        start = center - timedelta(days=window_days)
+        end = center + timedelta(days=window_days)
+        if end.date() >= now.date():
+            end = now - timedelta(days=1)
+        if start.date() > end.date():
+            continue
+        params = {
+            "latitude": f"{coords[0]:.4f}",
+            "longitude": f"{coords[1]:.4f}",
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d"),
+            "daily": "weathercode,temperature_2m_max,temperature_2m_min",
+            "timezone": "Asia/Seoul",
+        }
+        url = f"{OPEN_METEO_ARCHIVE_URL}?{urllib.parse.urlencode(params)}"
+        try:
+            with urllib.request.urlopen(url, timeout=WEATHER_REQUEST_TIMEOUT_SEC) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            continue
+        daily = payload.get("daily") or {}
+        year_tmax = [v for v in (daily.get("temperature_2m_max") or []) if v is not None]
+        year_tmin = [v for v in (daily.get("temperature_2m_min") or []) if v is not None]
+        year_codes = [v for v in (daily.get("weathercode") or []) if v is not None]
+        if not year_tmax and not year_tmin:
+            continue
+        tmax_values.extend(year_tmax)
+        tmin_values.extend(year_tmin)
+        codes.extend(year_codes)
+        used_years.append(year)
+
+    if not tmax_values or not tmin_values:
+        return None
+
+    avg_tmax = round(sum(tmax_values) / len(tmax_values))
+    avg_tmin = round(sum(tmin_values) / len(tmin_values))
+    condition = "정보없음"
+    if codes:
+        common_code = Counter(_to_int(c) for c in codes).most_common(1)[0][0]
+        condition, _ = _WMO_CODE.get(common_code if common_code is not None else -1, ("정보없음", False))
+
+    year_label = "·".join(str(y) for y in sorted(used_years))
+    return {
+        "years_used": used_years,
+        "temp_min": avg_tmin,
+        "temp_max": avg_tmax,
+        "condition": condition,
+        "summary": (
+            f"(예보 범위 밖 참고치) {year_label}년 {target.strftime('%m/%d')} 전후 평균 "
+            f"{condition}, {avg_tmin}~{avg_tmax}℃"
+        ),
+    }
+
+
 def fetch_weather(
     city: str | None,
     days: int | None = None,
@@ -203,24 +286,43 @@ def fetch_weather(
         date_str = target.strftime("%Y-%m-%d")
         api_i = by_date.get(date_str)
         if api_i is None:
-            # Outside forecast window: still emit a shell so Day N maps correctly.
+            # Outside forecast window: fall back to a historical-average estimate
+            # so we still emit a shell and Day N maps correctly.
             try:
                 weekday = _WEEKDAY_KO[target.weekday()]
             except Exception:
                 weekday = ""
-            out.append(
-                {
-                    "day": day_index,
-                    "date": date_str,
-                    "weekday": weekday,
-                    "condition": "예보 없음",
-                    "temp_min": None,
-                    "temp_max": None,
-                    "pop": None,
-                    "rain": False,
-                    "summary": "예보 범위 밖",
-                }
-            )
+            normal = _fetch_climate_normal(coords, target, now=now)
+            if normal:
+                out.append(
+                    {
+                        "day": day_index,
+                        "date": date_str,
+                        "weekday": weekday,
+                        "condition": normal["condition"],
+                        "temp_min": normal["temp_min"],
+                        "temp_max": normal["temp_max"],
+                        "pop": None,
+                        "rain": False,
+                        "summary": normal["summary"],
+                        "source": "climate_avg",
+                    }
+                )
+            else:
+                out.append(
+                    {
+                        "day": day_index,
+                        "date": date_str,
+                        "weekday": weekday,
+                        "condition": "예보 없음",
+                        "temp_min": None,
+                        "temp_max": None,
+                        "pop": None,
+                        "rain": False,
+                        "summary": "예보 범위 밖",
+                        "source": "unavailable",
+                    }
+                )
             continue
         out.append(
             _summarize_day(
@@ -272,6 +374,7 @@ def _summarize_day(
         "pop": pop_i,
         "rain": rain,
         "summary": ", ".join(parts),
+        "source": "forecast",
     }
 
 
@@ -372,8 +475,14 @@ def build_realtime_context(
             if closed:
                 names = ", ".join(p["name"] for p in closed["places"] if p.get("name"))
                 lines.append(f"  · 휴무 추정({closed['weekday']}요일): {names}")
-        if any(w.get("condition") == "예보 없음" for w in weather):
-            lines.append("- 일부 날짜는 Open-Meteo 예보 범위(최대 16일) 밖입니다.")
+        if any(w.get("source") == "climate_avg" for w in weather):
+            lines.append(
+                f"- (참고치) 표시된 날짜는 Open-Meteo 예보 범위(최대 {WEATHER_FORECAST_MAX_DAYS}일) 밖이라 "
+                "실제 예보 대신 최근 수년간 같은 시기의 평균 기온/날씨입니다. 정확한 예보가 아니니 "
+                "출발일이 가까워지면 다시 확인하라고 안내하세요."
+            )
+        if any(w.get("source") == "unavailable" for w in weather):
+            lines.append("- 일부 날짜는 예보/평균 데이터를 모두 가져오지 못했습니다.")
     elif closed_by_day:
         for closed in closed_by_day:
             names = ", ".join(p["name"] for p in closed["places"] if p.get("name"))
