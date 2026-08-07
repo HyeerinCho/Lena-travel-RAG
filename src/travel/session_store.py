@@ -70,6 +70,7 @@ def init_session_db(db_path: Path | None = None) -> None:
             ("excluded_places", "TEXT"),
             ("shown_poi_ids", "TEXT"),
             ("shown_place_names", "TEXT"),
+            ("last_target_day", "INTEGER"),
         ]
         for name, col_type in migrations:
             if name not in cols:
@@ -110,6 +111,7 @@ def _row_to_session(row: sqlite3.Row) -> dict[str, Any]:
         "shown_place_names": _json_list(
             row["shown_place_names"] if "shown_place_names" in keys else None
         ),
+        "last_target_day": row["last_target_day"] if "last_target_day" in keys else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -179,12 +181,15 @@ class TravelSessionStore:
                     """,
                     (owner_id,),
                 ).fetchall()
-                # Claim unowned sessions for this client on list, but only filter to owner after.
+                # 미소유 세션은 아직 메시지가 없는(즉, 실제 대화 기록이 없는) 경우에만
+                # 자동으로 이 클라이언트 소유로 넘긴다. 메시지가 있는 레거시 미소유
+                # 세션까지 통째로 넘기면 먼저 목록을 조회한 클라이언트가 다른 사람의
+                # 대화 기록을 그대로 가져가 버리는 세션 유출이 될 수 있다.
                 filtered = []
                 for row in rows:
                     item = _row_to_session(row)
                     item["message_count"] = row["message_count"]
-                    if item.get("owner_id") is None:
+                    if item.get("owner_id") is None and item["message_count"] == 0:
                         conn.execute(
                             "UPDATE sessions SET owner_id = ? WHERE id = ? AND owner_id IS NULL",
                             (owner_id, item["id"]),
@@ -228,6 +233,13 @@ class TravelSessionStore:
             return session
         if session.get("owner_id") is None:
             with _connect(self.db_path) as conn:
+                has_messages = conn.execute(
+                    "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1", (session_id,)
+                ).fetchone()
+                if has_messages:
+                    # 메시지가 있는 미소유 세션은 세션 ID만 알면(추측/유출) 누구나
+                    # 자동으로 가져갈 수 있으므로 자동 클레임하지 않는다.
+                    return None
                 conn.execute(
                     "UPDATE sessions SET owner_id = ? WHERE id = ? AND owner_id IS NULL",
                     (owner_id, session_id),
@@ -280,6 +292,7 @@ class TravelSessionStore:
         excluded_places: list[str] | None = None,
         shown_poi_ids: list[str] | None = None,
         shown_place_names: list[str] | None = None,
+        last_target_day: int | None = None,
         owner_id: str | None = None,
     ) -> dict[str, Any] | None:
         session = self.ensure_owner(session_id, owner_id) if owner_id else self.get_session(session_id)
@@ -314,6 +327,11 @@ class TravelSessionStore:
             if shown_place_names is not None
             else session.get("shown_place_names") or []
         )
+        # 0을 넘기면 명시적으로 초기화(마지막으로 손댄 일차 없음)한다는 뜻.
+        new_last_target_day = (
+            last_target_day if last_target_day is not None else session.get("last_target_day")
+        )
+        new_last_target_day = new_last_target_day or None
         now = _utcnow()
 
         if (
@@ -330,7 +348,7 @@ class TravelSessionStore:
                 SET title = ?, destination = ?, days = ?, budget = ?,
                     language = ?, preferences = ?, start_date = ?,
                     excluded_places = ?, shown_poi_ids = ?, shown_place_names = ?,
-                    updated_at = ?
+                    last_target_day = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -344,6 +362,7 @@ class TravelSessionStore:
                     json.dumps(new_excluded, ensure_ascii=False),
                     json.dumps(new_shown_ids, ensure_ascii=False),
                     json.dumps(new_shown_names, ensure_ascii=False),
+                    new_last_target_day,
                     now,
                     session_id,
                 ),

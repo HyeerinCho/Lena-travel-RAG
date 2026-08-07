@@ -1929,6 +1929,12 @@
         for (const p of places) {
           const li = document.createElement("li");
           li.className = "city-item";
+          if (p.is_primary) {
+            const badge = document.createElement("span");
+            badge.className = "stay-meta";
+            badge.textContent = "⭐ 대표 추천 ";
+            li.appendChild(badge);
+          }
           const name = document.createElement("span");
           name.className = "city-name";
           name.textContent = p.place_name || "장소";
@@ -2003,15 +2009,7 @@
             .filter(Boolean)
             .join(" · ");
           btn.textContent = `대안 ${index + 1}${opt.theme ? ` · ${opt.theme}` : ""}: ${names || "일정"}`;
-          btn.addEventListener("click", () => {
-            const places = (opt.slots || [])
-              .map((s) => s.place_name)
-              .filter(Boolean)
-              .join(", ");
-            sendQuickQuestion(
-              `${dayNum || opt.day || ""}일차를 다음으로 확정해줘: ${places}`
-            );
-          });
+          btn.addEventListener("click", () => confirmDayOption(dayNum || opt.day, opt));
           section.appendChild(btn);
         });
         return section;
@@ -2700,6 +2698,19 @@
         const question = `${day}일차만 바꿔줘`;
         addBubble(question, "user");
         await runStreamQuery(question, { rewrite_day: day });
+      }
+
+      async function confirmDayOption(day, opt) {
+        if (!currentSessionId || busy || !day) return;
+        const names = (opt.slots || [])
+          .map((s) => s.place_name)
+          .filter(Boolean)
+          .join(", ");
+        const question = `${day}일차 대안으로 확정할게요: ${names}`;
+        addBubble(question, "user");
+        await runStreamQuery(question, {
+          confirm_day: { day, theme: opt.theme || "", slots: opt.slots || [] },
+        });
       }
 
       async function parseSseStream(response, handlers) {

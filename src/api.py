@@ -30,6 +30,7 @@ class TravelQueryRequest(BaseModel):
     preferences: list[str] | None = None
     rewrite_day: int | None = Field(default=None, ge=1, le=30)
     start_date: str | None = None
+    confirm_day: dict[str, Any] | None = None
 
 
 class TravelQueryResponse(BaseModel):
@@ -270,6 +271,7 @@ def travel_session_query(
             preferences=request.preferences,
             rewrite_day=request.rewrite_day,
             start_date=request.start_date,
+            confirm_day=request.confirm_day,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.") from None
@@ -300,6 +302,7 @@ def travel_session_query_stream(
                 preferences=request.preferences,
                 rewrite_day=request.rewrite_day,
                 start_date=request.start_date,
+                confirm_day=request.confirm_day,
             ):
                 yield _sse(event_type, payload)
         except Exception as exc:

@@ -275,16 +275,16 @@ def _summarize_day(
     }
 
 
-def _closed_today(closed_ko: str | None, when: datetime) -> bool:
+def _closed_on(closed_ko: str | None, when: datetime) -> bool:
     if not closed_ko:
         return False
     text = str(closed_ko)
     if any(k in text for k in ("연중무휴", "무휴", "없음")):
         return False
-    today = _WEEKDAY_KO[when.weekday()]
-    if f"{today}요일" in text or f"매주 {today}" in text:
+    weekday = _WEEKDAY_KO[when.weekday()]
+    if f"{weekday}요일" in text or f"매주 {weekday}" in text:
         return True
-    if f"{today}" in text and "요일" in text:
+    if f"{weekday}" in text and "요일" in text:
         return True
     return False
 
@@ -295,11 +295,11 @@ def operating_notes(
     when: datetime | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    """오늘 휴무로 추정되는 후보 장소 노트."""
+    """주어진 날짜 기준으로 휴무로 추정되는 후보 장소 노트."""
     when = when or datetime.now(KST)
     notes: list[dict[str, Any]] = []
     for p in places[:limit]:
-        if _closed_today(p.get("closed_ko"), when):
+        if _closed_on(p.get("closed_ko"), when):
             notes.append(
                 {
                     "poi_id": p.get("poi_id"),
@@ -308,6 +308,34 @@ def operating_notes(
                 }
             )
     return notes
+
+
+def operating_notes_by_day(
+    places: list[dict[str, Any]],
+    *,
+    trip_start: datetime,
+    num_days: int,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """여행 시작일 기준 Day1..N 각각의 실제 날짜에 맞춰 휴무 추정 장소를 계산한다.
+
+    '오늘'(서버 시각) 요일이 아니라 각 Day가 실제로 해당하는 요일을 사용해야
+    미래 출발 일정에서 휴무 안내가 일정 날짜와 어긋나지 않는다.
+    """
+    out: list[dict[str, Any]] = []
+    for day_index in range(1, max(1, num_days) + 1):
+        target = trip_start + timedelta(days=day_index - 1)
+        notes = operating_notes(places, when=target, limit=limit)
+        if notes:
+            out.append(
+                {
+                    "day": day_index,
+                    "date": target.strftime("%Y-%m-%d"),
+                    "weekday": _WEEKDAY_KO[target.weekday()],
+                    "places": notes,
+                }
+            )
+    return out
 
 
 def build_realtime_context(
@@ -328,29 +356,39 @@ def build_realtime_context(
         start_date=start_date,
         now=now,
     )
-    closed_today = operating_notes(places, when=now)
+    trip_start = resolve_start_date(start_date, now=now)
+    closed_by_day = operating_notes_by_day(places, trip_start=trip_start, num_days=trip_days)
+    closed_by_day_map = {c["day"]: c for c in closed_by_day}
 
     lines: list[str] = []
     if weather:
-        start = resolve_start_date(start_date, now=now).strftime("%Y-%m-%d")
-        lines.append(f"[날씨 예보 · {destination or '여행지'} · 시작 {start}]")
+        lines.append(f"[날씨 예보 · {destination or '여행지'} · 시작 {trip_start.strftime('%Y-%m-%d')}]")
         for w in weather:
             tail = " → 실내 위주 권장" if w.get("rain") else ""
             lines.append(
                 f"- Day{w['day']} {w['date']}({w['weekday']}): {w['summary']}{tail}"
             )
+            closed = closed_by_day_map.get(w["day"])
+            if closed:
+                names = ", ".join(p["name"] for p in closed["places"] if p.get("name"))
+                lines.append(f"  · 휴무 추정({closed['weekday']}요일): {names}")
         if any(w.get("condition") == "예보 없음" for w in weather):
             lines.append("- 일부 날짜는 Open-Meteo 예보 범위(최대 16일) 밖입니다.")
-    if closed_today:
-        lines.append(f"[오늘({_WEEKDAY_KO[now.weekday()]}) 휴무 추정]")
-        for c in closed_today:
-            lines.append(f"- {c['name']}: 휴무일 {c['closed_ko']}")
+    elif closed_by_day:
+        for closed in closed_by_day:
+            names = ", ".join(p["name"] for p in closed["places"] if p.get("name"))
+            lines.append(
+                f"[Day{closed['day']} {closed['date']}({closed['weekday']}) 휴무 추정]: {names}"
+            )
 
     text = "\n".join(lines) if lines else "(제공 가능한 실시간 정보 없음)"
+    # closed_today: 하위 호환용(실제 서버 시각 기준). 신규 로직은 closed_by_day를 사용.
+    closed_today = operating_notes(places, when=now)
     return {
         "generated_at": now.strftime("%Y-%m-%d %H:%M KST"),
-        "start_date": resolve_start_date(start_date, now=now).strftime("%Y-%m-%d"),
+        "start_date": trip_start.strftime("%Y-%m-%d"),
         "weather": weather,
         "closed_today": closed_today,
+        "closed_by_day": closed_by_day,
         "text": f"제공 시각: {now.strftime('%Y-%m-%d %H:%M KST')}\n{text}",
     }

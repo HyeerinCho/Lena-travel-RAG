@@ -29,6 +29,7 @@ from src.travel.travel_tools import TravelSearchService
 
 MAX_ITINERARIES = 6
 KST = timezone(timedelta(hours=9))
+_WEEKDAY_KO = "월화수목금토일"
 META_FALLBACK_KO = (
     "안녕하세요! 저는 LENA예요. 한국 여행 장소와 일정을 추천해 드리는 여행 플래너입니다. "
     "가고 싶은 지역·관심사·기간을 알려주시면 장소를 고르거나 일정을 짜 드릴 수 있어요."
@@ -71,6 +72,7 @@ class TravelState(TypedDict, total=False):
     want_alternatives: bool
     recommended_places: list[dict[str, Any]]
     day_options: list[dict[str, Any]]
+    last_target_day: int | None
 
 
 _ORDINAL_KO = {
@@ -167,6 +169,13 @@ def _heuristic_exclude_places(query: str) -> list[str]:
     return out
 
 
+_WEEKDAY_NAME_TO_INDEX = {
+    "월요일": 0, "화요일": 1, "수요일": 2, "목요일": 3,
+    "금요일": 4, "토요일": 5, "일요일": 6,
+    "월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6,
+}
+
+
 def _heuristic_start_date(query: str, *, now: datetime | None = None) -> str | None:
     now = now or datetime.now(KST)
     m = re.search(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", query)
@@ -190,6 +199,32 @@ def _heuristic_start_date(query: str, *, now: datetime | None = None) -> str | N
         return (now + timedelta(days=1)).strftime("%Y-%m-%d")
     if re.search(r"모레부터|모레\s*출발", query):
         return (now + timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # "다음주 금요일부터", "이번주 토요일에", "금요일부터 여행" 같은 상대 표현.
+    m = re.search(
+        r"(다음\s*주|이번\s*주|담주|차주)?\s*"
+        r"(월요일|화요일|수요일|목요일|금요일|토요일|일요일|월|화|수|목|금|토|일)"
+        r"\s*(?:부터|에|날)",
+        query,
+    )
+    if m:
+        next_week = bool(m.group(1) and "다음" in m.group(1) or (m.group(1) in ("담주", "차주") if m.group(1) else False))
+        weekday_idx = _WEEKDAY_NAME_TO_INDEX.get(m.group(2))
+        if weekday_idx is not None:
+            days_ahead = (weekday_idx - now.weekday()) % 7
+            if next_week:
+                days_ahead += 7
+            elif days_ahead == 0 and not m.group(1):
+                # 명시적으로 "이번주"라고 하지 않았고 오늘이 그 요일이면 오늘로 취급.
+                days_ahead = 0
+            return (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    if re.search(r"이번\s*주말", query):
+        days_ahead = (5 - now.weekday()) % 7  # 토요일
+        return (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    if re.search(r"다음\s*주말", query):
+        days_ahead = (5 - now.weekday()) % 7 + 7
+        return (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
     return None
 
 
@@ -246,11 +281,13 @@ def _detect_meta_intent(query: str) -> bool:
         r"뭔\s*데|뭔데|뭐야|무엇입니까|무엇인가요",
         r"자기\s*소개",
         r"누구야|누구세요|너\s*는\s*누구",
-        r"이\s*(서비스|앱|봇|채팅|챗봇|모델|건)",
+        # "이/이거/이건/이게" + (임의 토큰) + 서비스/앱/봇/모델 등 — 사이에 다른 말이 껴도 매칭
+        r"이(거|건|게)?\s*.{0,6}(서비스|앱|봇|채팅|챗봇|모델|프로그램|건)",
         r"소개\s*해",
-        r"how\s+do\s+you\s+work|what\s+are\s+you|who\s+are\s+you",
+        r"how\s+do\s+you\s+work|what\s+are\s+you|who\s+are\s+you|what\s+is\s+this",
         r"lena\s*(가|이|은|는)?\s*뭐",
-        r"할\s*수\s*있는\s*일|기능\s*이\s*뭐|어떻게\s*써|사용\s*법",
+        r"할\s*수\s*있는\s*일|기능\s*이\s*뭐|무슨\s*기능",
+        r"어떻게\s*(써|쓰는|사용|이용)|사용\s*법|이용\s*법|사용\s*방법",
     ]
     return any(re.search(p, query, re.I) for p in patterns)
 
@@ -460,11 +497,14 @@ def _heuristic_extract(query: str) -> dict[str, Any]:
         intent = "meta"
     elif _detect_city_list_intent(query):
         intent = "city_list"
-    elif _detect_place_list_intent(query) or _detect_want_alternatives(query):
+    elif _detect_place_list_intent(query):
         intent = "place_list"
     elif _detect_qa_intent(query):
         intent = "qa"
     else:
+        # want_alternatives("다른 곳 없어?" 등)만으로는 여기서 place_list로 단정하지 않는다.
+        # 이전 일정이 있는지(previous_itinerary)는 _run_extract에서만 알 수 있으므로,
+        # 그곳의 컨텍스트 인지 분기(place_list 여부 / 특정 일차 이어가기)에 맡긴다.
         intent = "itinerary"
 
     return {
@@ -795,18 +835,22 @@ def _build_place_list(state: TravelState, parsed: dict[str, Any]) -> TravelState
                 "poi_id": (src or {}).get("poi_id") or poi_id,
                 "merit": item.get("merit") or "",
                 "city": (src or {}).get("city") or item.get("city"),
+                "is_primary": bool(item.get("is_primary")),
             }
         )
     if not recommended:
-        for p in candidates[:8]:
+        for i, p in enumerate(candidates[:4]):
             recommended.append(
                 {
                     "place_name": p.get("name_ko") or p.get("name_en"),
                     "poi_id": p.get("poi_id"),
                     "merit": p.get("travel_type") or "",
                     "city": p.get("city"),
+                    "is_primary": i == 0,
                 }
             )
+    if recommended and not any(r.get("is_primary") for r in recommended):
+        recommended[0]["is_primary"] = True
     warnings = list(state.get("warnings") or [])
     warnings.extend(parsed.get("warnings") or [])
     answer = parsed.get("answer")
@@ -1221,11 +1265,34 @@ def _run_extract(state: TravelState, llm: ChatGoogleGenerativeAI) -> TravelState
         if state.get(key) not in (None, [], ""):
             base[key] = state[key]
 
+    if _detect_meta_intent(state["query"]):
+        # 자기소개/메타 질문은 확신도 높은 정규식으로 즉시 판별 가능하므로,
+        # 매 턴 도는 무거운 TRAVEL_EXTRACT_PROMPT LLM 호출을 건너뛴다.
+        # (이후 TRAVEL_META_PROMPT 1회 호출만 남아 응답이 훨씬 빨라진다.)
+        merged = {**base}
+        merged["intent"] = "meta"
+        merged["want_alternatives"] = False
+        if not merged.get("preferences"):
+            merged["preferences"] = []
+        if not merged.get("place_types"):
+            merged["place_types"] = ["관광지", "문화시설"]
+        if not merged.get("language"):
+            merged["language"] = "ko"
+        if "previous_itinerary" in state:
+            merged["previous_itinerary"] = state["previous_itinerary"]
+        if state.get("shown_poi_ids") is not None:
+            merged["shown_poi_ids"] = list(state.get("shown_poi_ids") or [])
+        if state.get("shown_place_names") is not None:
+            merged["shown_place_names"] = list(state.get("shown_place_names") or [])
+        return merged
+
+    now = datetime.now(KST)
     try:
         raw = (TRAVEL_EXTRACT_PROMPT | llm).invoke(
             {
                 "question": state["query"],
                 "history": history,
+                "today": f"{now.strftime('%Y-%m-%d')} ({_WEEKDAY_KO[now.weekday()]}요일)",
                 "session_destination": state.get("destination") or base.get("destination"),
                 "session_days": state.get("days") or base.get("days"),
                 "session_budget": state.get("budget") or base.get("budget"),
@@ -1288,18 +1355,22 @@ def _run_extract(state: TravelState, llm: ChatGoogleGenerativeAI) -> TravelState
     ):
         base["intent"] = "place_list"
 
-    if previous and _heuristic_exclude_places(state["query"]) and not _detect_edit_intent(
-        state["query"], previous
-    ):
-        # "XX 싫어해" with existing itinerary → edit
-        if not merged.get("rewrite_day"):
-            base["intent"] = "edit"
-
     merged["want_alternatives"] = bool(
         base.get("want_alternatives")
         or parsed.get("want_alternatives")
         or state.get("want_alternatives")
     )
+
+    # "다른 곳 없어?"처럼 일차 지정 없이 대안을 요청했는데 직전에 특정 일차를
+    # 다시 짰던 세션이면, 전체를 새로 만들지 않고 그 일차를 이어서 다시 짠다.
+    if (
+        merged["want_alternatives"]
+        and previous
+        and merged.get("rewrite_day") is None
+        and not (merged.get("insert_place") and merged.get("target_day"))
+        and state.get("last_target_day")
+    ):
+        merged["rewrite_day"] = state["last_target_day"]
 
     merged["intent"] = _resolve_intent(
         base.get("intent"),
@@ -1313,9 +1384,31 @@ def _run_extract(state: TravelState, llm: ChatGoogleGenerativeAI) -> TravelState
     if _detect_meta_intent(state["query"]):
         merged["intent"] = "meta"
 
+    # "다른 곳 없어?"는 place_list 패턴("다른 곳/장소")과도 겹치지만, 이미 만든
+    # 일정이 있는 대화의 연장선이면 새 장소 목록이 아니라 그 일정의 대안(위의
+    # rewrite_day 분기 또는 구조를 유지한 전체 교체)으로 처리해야 한다.
+    if previous and merged.get("want_alternatives") and merged.get("intent") == "place_list":
+        merged["intent"] = "itinerary"
+
     # Force edit for insert into day
     if previous and merged.get("insert_place") and merged.get("target_day"):
         merged["intent"] = "edit"
+
+    # "일정 속 OO 싫어해"처럼 정규식/LLM 중 하나라도 이번 턴에 제외 장소를 잡아냈고,
+    # 그 이름이 실제로 기존 일정 안에 있으면 — 문구가 정형화되지 않아 정규식이나
+    # LLM 의도 분류가 놓치더라도 — 반드시 edit로 라우팅해 실제로 빼도록 강제한다.
+    this_turn_excludes = _merge_lists(
+        base.get("exclude_places"),
+        parsed.get("exclude_places") if isinstance(parsed.get("exclude_places"), list) else None,
+    )
+    if previous and this_turn_excludes and merged.get("intent") not in ("meta", "city_list"):
+        _, itinerary_names = _places_from_itinerary(previous)
+        itinerary_names_norm = {_norm_name(n) for n in itinerary_names if n}
+        if any(
+            _norm_name(x) and any(_norm_name(x) in n or n in _norm_name(x) for n in itinerary_names_norm)
+            for x in this_turn_excludes
+        ):
+            merged["intent"] = "edit"
 
     excluded = list(base.get("exclude_cities") or [])
     for c in parsed.get("exclude_cities") or []:
@@ -1357,12 +1450,28 @@ def _search_for_state(state: TravelState, search: TravelSearchService) -> Travel
     exclude_places = list(state.get("exclude_places") or [])
     shown_ids = list(state.get("shown_poi_ids") or [])
     shown_names = list(state.get("shown_place_names") or [])
-    if state.get("want_alternatives") or state.get("intent") == "place_list":
-        pass  # keep shown in filter
-    elif state.get("intent") == "itinerary" and not state.get("rewrite_day"):
-        # new full plan can reuse region places unless alternatives
-        shown_ids = [] if not state.get("want_alternatives") else shown_ids
-        shown_names = [] if not state.get("want_alternatives") else shown_names
+    # 세션 내에서 한 번 보여준 장소는 계속 제외 후보로 유지한다(재추천 방지).
+    # 단, 이번 세션에서 아직 아무 일정도 만든 적이 없는 "첫 일정" 요청이면
+    # (previous_itinerary가 없으면) 과거 다른 대화의 shown 목록에 얽매이지 않도록 초기화한다.
+    if (
+        state.get("intent") == "itinerary"
+        and not state.get("rewrite_day")
+        and not state.get("want_alternatives")
+        and not state.get("previous_itinerary")
+    ):
+        shown_ids = []
+        shown_names = []
+
+    # "~을 N일차에 넣어줘": 넣으려는 그 장소는 이미 이전 턴에 보여줬기 때문에
+    # shown/exclude 목록에 걸려 후보 풀에서 사라지기 쉽다. 삽입 대상만 예외로 둔다.
+    # poi_id는 검색 전에는 알 수 없어 이름으로만 걸러낼 수 있으므로, 이번 검색에
+    # 한해 poi_id 기준 shown 필터는 아예 적용하지 않는다(찾아서 못 넣는 것보다 안전).
+    insert_place = state.get("insert_place")
+    if insert_place:
+        needle = _norm_name(insert_place)
+        exclude_places = [n for n in exclude_places if not _norm_name(n) or (needle not in _norm_name(n) and _norm_name(n) not in needle)]
+        shown_names = [n for n in shown_names if not _norm_name(n) or (needle not in _norm_name(n) and _norm_name(n) not in needle)]
+        shown_ids = []
 
     if state.get("intent") == "city_list":
         places = search.search_places(query=query, city=destination, types=types, limit=60)
@@ -1595,6 +1704,12 @@ def _build_response(
     external_text = state.get("external_text") or ""
     if external_text:
         realtime_text = f"{realtime_text}\n{external_text}"
+    if not state.get("start_date") and realtime.get("weather"):
+        state = dict(state)
+        state["warnings"] = list(state.get("warnings") or []) + [
+            "출발일을 알려주지 않아 오늘부터 시작한다고 가정하고 날씨를 보여드려요. "
+            "정확한 날짜를 알려주시면 다시 맞춰드릴게요."
+        ]
 
     if intent == "edit" and previous:
         insert_place = state.get("insert_place")
@@ -1642,6 +1757,18 @@ def _build_response(
                     "intent": "edit",
                     "realtime": realtime,
                 }
+            return {
+                "itinerary": previous,
+                "warnings": list(state.get("warnings") or [])
+                + [f"'{insert_place}'을(를) 찾지 못해 일정에 반영하지 못했어요."],
+                "answer": (
+                    f"'{insert_place}'을(를) 찾지 못해 {int(target_day)}일차에 넣지 못했어요. "
+                    "정확한 장소명으로 다시 말씀해 주시겠어요?"
+                ),
+                "sources": _build_sources(state),
+                "intent": "edit",
+                "realtime": realtime,
+            }
 
         # Remove disliked places via code
         if exclude_places and not insert_place:
@@ -2011,6 +2138,11 @@ def stream_build_itinerary_tokens(
     if external_text:
         realtime_text = f"{realtime_text}\n{external_text}"
     result_so_far["realtime"] = realtime
+    if not result_so_far.get("start_date") and realtime.get("weather"):
+        result_so_far["warnings"] = list(result_so_far.get("warnings") or []) + [
+            "출발일을 알려주지 않아 오늘부터 시작한다고 가정하고 날씨를 보여드려요. "
+            "정확한 날짜를 알려주시면 다시 맞춰드릴게요."
+        ]
 
     if not places and not courses:
         fallback = _fallback_itinerary(result_so_far)
@@ -2093,6 +2225,7 @@ def _result_payload(state: TravelState) -> dict[str, Any]:
         "sources": state.get("sources") or [],
         "answer": state.get("answer") or "",
         "rewrite_day": state.get("rewrite_day"),
+        "target_day": state.get("target_day"),
         "exclude_places": state.get("exclude_places") or [],
         "realtime": state.get("realtime") or {},
         "external": state.get("external") or {},

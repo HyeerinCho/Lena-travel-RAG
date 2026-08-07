@@ -174,36 +174,53 @@ class TravelSearchService:
         if not place:
             return None
         homepage = (place.get("homepage") or "").strip()
-        if not homepage:
-            # TourAPI detailCommon homepage 보강 시도
+        address = (place.get("address_ko") or "").strip()
+        phone = (place.get("phone") or "").strip()
+        if not homepage or not address or not phone:
+            # TourAPI detailCommon으로 홈페이지/주소/전화 보강 시도 (DB에 없을 때만).
             try:
                 from src.travel.tour_api import kor_service
 
                 common = kor_service.detail_common(str(poi_id))
                 if isinstance(common, dict):
-                    for key in ("homepage", "hmpg", "hmpgurl"):
-                        val = str(common.get(key) or "").strip()
-                        if val.startswith("http"):
-                            homepage = val
-                            place["homepage"] = homepage
-                            break
-                    # HTML anchor sometimes nested
                     if not homepage:
-                        raw = str(common.get("homepage") or "")
-                        if "http" in raw:
-                            import re as _re
+                        for key in ("homepage", "hmpg", "hmpgurl"):
+                            val = str(common.get(key) or "").strip()
+                            if val.startswith("http"):
+                                homepage = val
+                                place["homepage"] = homepage
+                                break
+                        # HTML anchor sometimes nested
+                        if not homepage:
+                            raw = str(common.get("homepage") or "")
+                            if "http" in raw:
+                                import re as _re
 
-                            m = _re.search(r"https?://[^\s\"'<>]+", raw)
-                            if m:
-                                place["homepage"] = m.group(0)
-                                homepage = m.group(0)
+                                m = _re.search(r"https?://[^\s\"'<>]+", raw)
+                                if m:
+                                    place["homepage"] = m.group(0)
+                                    homepage = m.group(0)
+                    if not address:
+                        addr_val = " ".join(
+                            x for x in (common.get("addr1"), common.get("addr2")) if x
+                        ).strip()
+                        if addr_val:
+                            place["address_ko"] = addr_val
+                            address = addr_val
+                    if not phone:
+                        tel_val = str(common.get("tel") or "").strip()
+                        if tel_val:
+                            place["phone"] = tel_val
+                            phone = tel_val
             except Exception:
                 pass
         name = place.get("name_ko") or place.get("name_en") or ""
         region = " ".join(
             x for x in (place.get("region"), place.get("city")) if x
         )
-        query = f"{name} {region}".strip()
+        # 주소가 있으면 동명이인/동명이지 혼동을 줄이기 위해 지역명보다 주소를 우선 사용.
+        location = address or region
+        query = f"{name} {location}".strip()
         place["search_url"] = (
             f"https://search.naver.com/search.naver?query={_url_quote(query)}"
             if query
